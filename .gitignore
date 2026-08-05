@@ -24,3 +24,8 @@ __pycache__/
 # Isolated implementation workspaces and agent scratch
 .worktrees/
 .superpowers/
+*.joblib
+*.pkl
+artifacts/
+reports/
+runs/
