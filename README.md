@@ -1,8 +1,7 @@
 # phishMe
 
 phishMe is a leakage-aware lightweight phishing detection research pipeline for a
-sparse, browser-computable classifier. The current repository state is the Task 1
-package shell and research protocol.
+sparse, browser-computable classifier.
 
 ## References
 
@@ -27,10 +26,20 @@ python -m pytest tests/test_package.py -q
 
 ## Commands
 
-The following commands are planned and are not verified until Task 9:
+Verified by synthetic integration tests:
 
-- `python -m phishme audit`
-- `python -m phishme local`
+- `python -m phishme audit --csv PATH`
+- `python -m phishme local --csv PATH --output DIR`
+
+`local` writes `DIR/run.json`, `DIR/splits.json`, `DIR/model.json`, and
+`DIR/test-metrics.json`. It accepts optional `--epochs`, `--batch-size`, and
+`--seed` arguments.
+
+The real PhiUSIIL local baseline is pending host execution; no real baseline
+metrics are verified in this repository state.
+
+Planned or separately verified commands:
+
 - `python -m phishme phresh-smoke`
 - `node --test web/parity.test.mjs`
 - Open `web/benchmark.html` in Chrome
