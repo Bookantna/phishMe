@@ -20,3 +20,7 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+
+# Isolated implementation workspaces and agent scratch
+.worktrees/
+.superpowers/
