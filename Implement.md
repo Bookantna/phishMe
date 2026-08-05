@@ -1,8 +1,7 @@
 # phishMe Implementation Log
 
 ## Status
-- In progress: real local baseline execution on the full PhiUSIIL CSV.
-- Complete: Task 6 synthetic end-to-end local CLI implementation.
+- Complete: Task 6 end-to-end local CLI and real PhiUSIIL baseline.
 - Complete: Task 2 canonical PhiUSIIL adapter and leakage-safe local split.
 - Blocked: full PhreshPhish training requires a cloud runtime.
 - Not run: controlled PhishLang comparison.
@@ -37,6 +36,38 @@
   smoke: exited 0 and wrote `run.json`, `splits.json`, `model.json`, and
   `test-metrics.json`; synthetic `model.json` was `1,051,759` bytes. The selected
   synthetic config was `include_dom=false`, `alpha=1e-05`, `threshold=1.0`.
+- `.venv/bin/python -m phishme audit --csv dataset/PhiUSIIL_Phishing_URL_Dataset.csv`:
+  exited 0; the dataset SHA-256 was
+  `a236549cd369cd80bd478ff8e1779cbf44c58d5c3f79f7a51a1adbed7d06d1c6`;
+  it found 235,795 raw rows, 233,971 canonical rows, and 1,824 duplicates.
+  The domain-disjoint splits were train 140,382 rows (80,909 benign, 59,473 phishing,
+  105,309 groups), validation 46,794 rows (26,970 benign, 19,824 phishing, 35,101
+  groups), and test 46,795 rows (26,970 benign, 19,825 phishing, 35,099 groups).
+  Their sample-manifest SHA-256 values were respectively
+  `15523e49c9768a7bd8945a8be21582219e800481fc9fb4a8f0f00653e7364a7f`,
+  `d3c92344e3d6fc5cc6854b8fb51a3a4e508f298fda6cc0bc91913877c08e2b23`, and
+  `bc7e5bfafabe59c966b14f4a0705c5e96eac68ea14b4b1aae3b5826661bfc2f9`.
+- `.venv/bin/python -m phishme local --csv dataset/PhiUSIIL_Phishing_URL_Dataset.csv
+  --output artifacts/local-v1`: exited 0 using source commit
+  `6c939803267f67fe94e19585fc389551c4959475`; all six candidates succeeded and
+  the test split was scored once. The selected candidate was DOM-enabled with alpha
+  `1e-05`, three epochs, batch size 2,048, threshold `0.9717452287519257`, validation
+  AP `0.9999989381709102`, and validation F1 `0.99979820401574`.
+- The untouched test result was average precision `0.9999888939542867`, F1
+  `0.9998234240597331`, accuracy `0.999850411368736`, ROC AUC
+  `0.9999906598382865`, precision `1.0`, recall `0.9996469104665826`, false-positive
+  rate `0.0`, Brier score `0.00010941090093052358`, and confusion matrix
+  `[[26970, 0], [7, 19818]]`.
+- Real baseline artifact outputs were: `model.json` 5,913,068 bytes, SHA-256
+  `3304bd9327506e0b3f63b6d0e5a7a6c044c740cefe30ebbfd22ee0db774fc00d`;
+  `run.json` 6,449 bytes, SHA-256
+  `5028da5a4bfc0a6babedd02b1e89ce5353068db53c6bd779f78d4f1810ba9cb2`;
+  `splits.json` 1,163 bytes, SHA-256
+  `691ce334d1f18be2c925616eeb8899c55dacc739e60f25c3944eeb32484ce8e8`;
+  and `test-metrics.json` 1,004 bytes, SHA-256
+  `fadf8a42991590c79e5e339c0939e8dc4cd8b072586f9f278baf31873a82aeee`.
+- Final Task 6 verification: `.venv/bin/python -m pytest -q` passed 51 tests,
+  `node --test web/parity.test.mjs` passed seven tests, and Ruff passed.
 
 ## Decisions and deviations
 - Used `.venv/bin/python` because the shell `python` resolves to a different virtualenv outside
@@ -53,9 +84,9 @@
   and `test-metrics.json`. The command stdout summary includes the final `run.json`
   byte size and SHA-256 because embedding an exact self-hash inside `run.json` would
   be self-referential.
-- The real `dataset/PhiUSIIL_Phishing_URL_Dataset.csv` baseline command was not run
-  in this worker. It remains pending host execution; no real AP/F1/accuracy values
-  are claimed.
+- The executable pipeline was committed before the real baseline so `run.json` records
+  the exact source commit used. The observed baseline was then recorded separately;
+  generated `artifacts/` remain ignored.
 
 ## Failed or negative results
 - Expected red test run confirmed missing `phishme.data` before implementation.
@@ -72,6 +103,4 @@
 - `tests/test_pipeline.py`
 
 ## Next actions
-- Host should run the full real local baseline:
-  `python -m phishme audit --csv dataset/PhiUSIIL_Phishing_URL_Dataset.csv` and
-  `python -m phishme local --csv dataset/PhiUSIIL_Phishing_URL_Dataset.csv --output artifacts/local-v1`.
+- Implement the pinned PhreshPhish streaming and resumable Colab workflow.
