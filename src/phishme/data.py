@@ -7,7 +7,34 @@ import pandas as pd
 import tldextract
 from sklearn.model_selection import StratifiedGroupKFold
 
+from phishme.features import NUMERIC_FEATURES, url_numeric_features
+
 _EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
+
+PHIUSIIL_DOM_MAP = {
+    "LineOfCode": "html_line_count",
+    "LargestLineLength": "largest_line_length",
+    "HasTitle": "has_title",
+    "HasFavicon": "has_favicon",
+    "IsResponsive": "is_responsive",
+    "HasDescription": "has_description",
+    "NoOfiFrame": "iframe_count",
+    "HasExternalFormSubmit": "external_form_submit",
+    "HasSocialNet": "has_social",
+    "HasSubmitButton": "has_submit_button",
+    "HasHiddenFields": "has_hidden_fields",
+    "HasPasswordField": "has_password_field",
+    "Bank": "mentions_bank",
+    "Pay": "mentions_pay",
+    "Crypto": "mentions_crypto",
+    "HasCopyrightInfo": "has_copyright",
+    "NoOfImage": "image_count",
+    "NoOfCSS": "css_count",
+    "NoOfJS": "javascript_count",
+    "NoOfSelfRef": "self_ref_count",
+    "NoOfEmptyRef": "empty_ref_count",
+    "NoOfExternalRef": "external_ref_count",
+}
 
 
 def canonicalize_url(url: str) -> str:
@@ -35,7 +62,7 @@ def _sample_id(url: str) -> str:
 
 def load_phiusill(path: Path) -> pd.DataFrame:
     frame = pd.read_csv(path, dtype={"label": "string"})
-    required = {"URL", "Title", "label"}
+    required = {"URL", "Title", "label", *PHIUSIIL_DOM_MAP}
     missing = sorted(required - set(frame.columns))
     if missing:
         raise ValueError(f"missing PhiUSIIL columns: {missing}")
@@ -52,10 +79,25 @@ def load_phiusill(path: Path) -> pd.DataFrame:
             "label": 1 - labels,
         }
     )
+    _add_feature_columns(frame, out)
     out["sample_id"] = out["url"].map(_sample_id)
     out = out.drop_duplicates("sample_id", keep="first").reset_index(drop=True)
     out["group"] = out["url"].map(registrable_domain)
     return out
+
+
+def _add_feature_columns(source: pd.DataFrame, out: pd.DataFrame) -> None:
+    for name in NUMERIC_FEATURES:
+        out[f"dom_{name}"] = 0.0
+    url_values = [url_numeric_features(url) for url in out["url"]]
+    for name in NUMERIC_FEATURES:
+        values = [features.get(name, 0.0) for features in url_values]
+        if any(values):
+            out[f"dom_{name}"] = values
+    for source_name, feature_name in PHIUSIIL_DOM_MAP.items():
+        out[f"dom_{feature_name}"] = (
+            pd.to_numeric(source[source_name], errors="coerce").fillna(0.0).astype(float)
+        )
 
 
 def split_local(frame: pd.DataFrame, seed: int = 42) -> dict[str, pd.DataFrame]:

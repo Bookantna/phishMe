@@ -68,6 +68,42 @@ Feature hashing uses FNV-1a 32-bit over UTF-8 bytes with offset basis
 `0x811C9DC5`, prime `0x01000193`, and arithmetic modulo `2^32`. Text features
 map into exactly `2^18` buckets with non-negative values.
 
+The frozen feature constants are:
+
+```python
+FEATURE_VERSION = "phishme-features-v1"
+HASH_DIM = 1 << 18
+NGRAM_RANGE = (3, 5)
+COUNT_FEATURES = (
+    "url_length", "domain_length", "tld_length", "subdomain_count",
+    "letter_count", "digit_count", "obfuscated_count", "query_count",
+    "equals_count", "ampersand_count", "special_count", "html_line_count",
+    "largest_line_length", "iframe_count", "image_count", "css_count",
+    "javascript_count", "self_ref_count", "empty_ref_count",
+    "external_ref_count",
+)
+RATIO_FEATURES = (
+    "letter_ratio", "digit_ratio", "obfuscated_ratio", "special_ratio",
+)
+BOOLEAN_FEATURES = (
+    "is_domain_ip", "is_https", "has_title", "has_favicon",
+    "is_responsive", "has_description", "external_form_submit",
+    "has_social", "has_submit_button", "has_hidden_fields",
+    "has_password_field", "mentions_bank", "mentions_pay",
+    "mentions_crypto", "has_copyright",
+)
+NUMERIC_FEATURES = COUNT_FEATURES + RATIO_FEATURES + BOOLEAN_FEATURES
+```
+
+The FNV-1a byte algorithm is:
+
+```python
+value = 0x811C9DC5
+for byte in text.encode("utf-8"):
+    value ^= byte
+    value = (value * 0x01000193) & 0xFFFFFFFF
+```
+
 Numeric count features use `log1p` after clipping to non-negative values.
 Ratios are clipped to `[0, 1]`. Boolean values are encoded as `0` or `1`. No
 fitted scaler is used.
