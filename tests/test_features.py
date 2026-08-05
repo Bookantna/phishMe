@@ -16,6 +16,8 @@ from phishme.features import (
 
 def test_fnv1a_matches_published_vector():
     assert fnv1a_32("hello") == 0x4F9F2CAB
+    assert fnv1a_32("é") == 0x1E9DE8C1
+    assert fnv1a_32("𠮷") == 0xC130251A
 
 
 def test_ngrams_are_unicode_normalized_and_namespaced():
@@ -51,6 +53,35 @@ def test_url_numeric_features_are_recomputed_from_raw_url():
     assert values["equals_count"] == 2.0
     assert values["ampersand_count"] == 1.0
     assert values["digit_ratio"] == values["digit_count"] / values["url_length"]
+
+
+def test_feature_side_authority_parser_handles_malformed_ports_and_nfkc_hosts():
+    malformed_port = url_numeric_features("http://example.com:abc/login")
+    assert malformed_port["domain_length"] == len("example.com")
+    assert malformed_port["tld_length"] == len("com")
+    assert malformed_port["subdomain_count"] == 0.0
+    assert malformed_port["is_domain_ip"] == 0.0
+
+    nfkc_host = "exa\uff0fmple.com"
+    nfkc = url_numeric_features(f"http://{nfkc_host}/login")
+    assert nfkc["domain_length"] == len(nfkc_host)
+    assert nfkc["tld_length"] == len("com")
+    assert nfkc["subdomain_count"] == 0.0
+    assert nfkc["is_domain_ip"] == 0.0
+
+
+def test_feature_side_ip_classification_uses_frozen_browser_rule():
+    cases = {
+        "http://192.0.2.1/login": 1.0,
+        "http://256.0.2.1/login": 0.0,
+        "http://192.0.02.1/login": 0.0,
+        "http://[2001:db8::1]/login": 1.0,
+        "http://[::ffff:192.0.2.1]/login": 1.0,
+        "http://[2001:db8:::1]/login": 0.0,
+        "http://[2001:db8::gg]/login": 0.0,
+    }
+    for url, expected in cases.items():
+        assert url_numeric_features(url)["is_domain_ip"] == expected
 
 
 def test_html_features_extract_browser_computable_dom_values():

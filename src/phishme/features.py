@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import ipaddress
 import math
 import re
 import unicodedata
-from urllib.parse import urljoin, urlsplit
+from typing import NamedTuple
 
 import numpy as np
-import tldextract
 from lxml import etree
 from lxml import html as lxml_html
 from scipy.sparse import csr_matrix
@@ -77,8 +75,77 @@ URL_NUMERIC_FEATURES = (
 )
 DOM_NUMERIC_FEATURES = tuple(name for name in NUMERIC_FEATURES if name not in URL_NUMERIC_FEATURES)
 
-_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None)
+FROZEN_SINGLE_LABEL_SUFFIXES = frozenset(
+    (
+        "ai",
+        "app",
+        "au",
+        "biz",
+        "br",
+        "cn",
+        "co",
+        "com",
+        "dev",
+        "edu",
+        "gov",
+        "info",
+        "int",
+        "io",
+        "jp",
+        "kr",
+        "mil",
+        "mx",
+        "net",
+        "nz",
+        "org",
+        "pl",
+        "sa",
+        "sg",
+        "th",
+        "tr",
+        "uk",
+        "us",
+        "za",
+    )
+)
+FROZEN_MULTI_LABEL_SUFFIXES = (
+    "ac.th",
+    "ac.uk",
+    "co.jp",
+    "co.kr",
+    "co.nz",
+    "co.th",
+    "co.uk",
+    "co.za",
+    "com.au",
+    "com.br",
+    "com.cn",
+    "com.mx",
+    "com.pl",
+    "com.sa",
+    "com.sg",
+    "com.tr",
+    "edu.au",
+    "go.th",
+    "gov.au",
+    "gov.uk",
+    "ltd.uk",
+    "me.uk",
+    "ne.jp",
+    "net.au",
+    "net.nz",
+    "or.jp",
+    "or.th",
+    "org.nz",
+    "org.uk",
+)
+_FROZEN_MULTI_LABEL_SUFFIX_LABELS = tuple(
+    tuple(suffix.split("."))
+    for suffix in sorted(FROZEN_MULTI_LABEL_SUFFIXES, key=lambda value: (-value.count("."), value))
+)
 _PERCENT_ESCAPE_RE = re.compile(r"%[0-9A-Fa-f]{2}")
+_IPV4_COMPONENT_RE = re.compile(r"^(0|[1-9][0-9]{0,2})$")
+_IPV6_GROUP_RE = re.compile(r"^[0-9A-Fa-f]{1,4}$")
 _HTML_PARSER = lxml_html.HTMLParser(recover=True, no_network=True)
 _REFERENCE_ATTRIBUTES = (
     ("//a[@href]", "href"),
@@ -110,6 +177,11 @@ _PAY_TERMS = ("pay", "payment", "paypal", "checkout")
 _CRYPTO_TERMS = ("crypto", "bitcoin", "btc", "ethereum", "wallet", "blockchain", "usdt")
 
 
+class _FeatureUrlParts(NamedTuple):
+    scheme: str
+    hostname: str
+
+
 def fnv1a_32(text: str) -> int:
     value = 0x811C9DC5
     for byte in text.encode("utf-8"):
@@ -131,10 +203,10 @@ def url_numeric_features(url: str) -> dict[str, float]:
     parts = _split_url(raw)
     host = (parts.hostname or "").lower()
     url_length = len(raw)
-    letter_count = sum(1 for character in raw if character.isalpha())
-    digit_count = sum(1 for character in raw if character.isdigit())
+    letter_count = sum(1 for character in raw if _is_unicode_letter(character))
+    digit_count = sum(1 for character in raw if _is_unicode_number(character))
     obfuscated_count = len(_PERCENT_ESCAPE_RE.findall(raw))
-    special_count = sum(1 for character in raw if not character.isalnum())
+    special_count = sum(1 for character in raw if not _is_unicode_alphanumeric(character))
     denominator = float(url_length or 1)
     suffix, subdomain_count = _suffix_and_subdomain_count(host)
 
@@ -264,32 +336,102 @@ def _as_text(value) -> str:
 
 
 def _split_url(url: str):
-    return urlsplit(url if "://" in url else "//" + url)
+    text = _as_text(url)
+    scheme = ""
+    rest = text
+    scheme_index = text.find("://")
+    if scheme_index >= 0:
+        scheme = text[:scheme_index].lower()
+        rest = text[scheme_index + 3 :]
+    elif text.startswith("//"):
+        rest = text[2:]
+
+    authority_end = len(rest)
+    for marker in ("/", "?", "#"):
+        marker_index = rest.find(marker)
+        if marker_index >= 0:
+            authority_end = min(authority_end, marker_index)
+    authority = rest[:authority_end]
+
+    at_index = authority.rfind("@")
+    if at_index >= 0:
+        authority = authority[at_index + 1 :]
+
+    hostname = authority
+    if hostname.startswith("["):
+        bracket_index = hostname.find("]")
+        hostname = hostname[1:bracket_index] if bracket_index >= 0 else hostname[1:]
+    else:
+        colon_index = hostname.rfind(":")
+        if colon_index >= 0:
+            hostname = hostname[:colon_index]
+    return _FeatureUrlParts(scheme=scheme, hostname=hostname)
 
 
 def _is_ip_address(host: str) -> bool:
-    if not host:
+    text = _as_text(host)
+    return _is_ipv4_address(text) or _is_ipv6_address(text)
+
+
+def _is_ipv4_address(host: str) -> bool:
+    pieces = host.split(".")
+    if len(pieces) != 4:
         return False
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        return False
+    for piece in pieces:
+        if not _IPV4_COMPONENT_RE.fullmatch(piece) or int(piece) > 255:
+            return False
     return True
+
+
+def _is_ipv6_address(host: str) -> bool:
+    if ":" not in host:
+        return False
+    if any(character not in "0123456789abcdefABCDEF:." for character in host):
+        return False
+
+    text = host
+    if "." in text:
+        last_colon = text.rfind(":")
+        if last_colon < 0 or not _is_ipv4_address(text[last_colon + 1 :]):
+            return False
+        text = f"{text[:last_colon]}:0:0"
+
+    if text.count("::") > 1:
+        return False
+    if "::" in text:
+        left, right = text.split("::")
+        left_groups = left.split(":") if left else []
+        right_groups = right.split(":") if right else []
+        if not _are_ipv6_groups(left_groups) or not _are_ipv6_groups(right_groups):
+            return False
+        return len(left_groups) + len(right_groups) < 8
+
+    groups = text.split(":")
+    return _are_ipv6_groups(groups) and len(groups) == 8
+
+
+def _are_ipv6_groups(groups: list[str]) -> bool:
+    return all(_IPV6_GROUP_RE.fullmatch(group) for group in groups)
 
 
 def _suffix_and_subdomain_count(host: str) -> tuple[str, int]:
     if not host or _is_ip_address(host):
         return "", 0
-    result = _EXTRACT(host)
-    suffix = result.suffix
-    if not suffix and "." in host:
-        suffix = host.rsplit(".", 1)[1]
-    subdomain = result.subdomain
-    if not subdomain and suffix:
-        suffix_labels = len(suffix.split("."))
-        labels = host.split(".")
-        subdomain = ".".join(labels[: -suffix_labels - 1])
-    subdomain_count = len([label for label in subdomain.split(".") if label])
+    labels = [label for label in host.split(".") if label]
+    if len(labels) <= 1:
+        return "", 0
+
+    multi_label_suffix = _matching_frozen_multi_label_suffix(labels)
+    if multi_label_suffix:
+        suffix_label_count = len(multi_label_suffix.split("."))
+        return multi_label_suffix, max(0, len(labels) - suffix_label_count - 1)
+
+    suffix = labels[-1]
+    subdomain_count = (
+        max(0, len(labels) - 2)
+        if suffix in FROZEN_SINGLE_LABEL_SUFFIXES
+        else max(0, len(labels) - 1)
+    )
     return suffix, subdomain_count
 
 
@@ -299,8 +441,35 @@ def _registrable_domain_from_url(url: str) -> str:
         return ""
     if _is_ip_address(host):
         return host
-    result = _EXTRACT(host)
-    return result.top_domain_under_public_suffix or host
+    suffix, subdomain_count = _suffix_and_subdomain_count(host)
+    labels = [label for label in host.split(".") if label]
+    if not suffix:
+        return host
+    suffix_label_count = len(suffix.split("."))
+    domain_start = max(0, len(labels) - suffix_label_count - 1)
+    if subdomain_count >= len(labels) - 1:
+        return host
+    return ".".join(labels[domain_start:])
+
+
+def _matching_frozen_multi_label_suffix(labels: list[str]) -> str:
+    for suffix_labels in _FROZEN_MULTI_LABEL_SUFFIX_LABELS:
+        if len(labels) > len(suffix_labels) and tuple(labels[-len(suffix_labels) :]) == suffix_labels:
+            return ".".join(suffix_labels)
+    return ""
+
+
+def _is_unicode_letter(character: str) -> bool:
+    return unicodedata.category(character).startswith("L")
+
+
+def _is_unicode_number(character: str) -> bool:
+    return unicodedata.category(character).startswith("N")
+
+
+def _is_unicode_alphanumeric(character: str) -> bool:
+    category = unicodedata.category(character)
+    return category.startswith(("L", "N"))
 
 
 def _transform(name: str, value: float) -> float:
@@ -401,12 +570,18 @@ def _classify_reference(base_url: str, reference: str) -> str:
     lower = value.lower()
     if not value or value.startswith("#") or lower.startswith(_EMPTY_REF_SCHEMES):
         return "empty"
-    target = urljoin(base_url, value)
+    target = _resolve_reference_url(base_url, value)
     target_domain = _registrable_domain_from_url(target)
     base_domain = _registrable_domain_from_url(base_url)
     if target_domain and base_domain and target_domain == base_domain:
         return "self"
     return "external"
+
+
+def _resolve_reference_url(base_url: str, reference: str) -> str:
+    if "://" in reference or reference.startswith("//"):
+        return reference
+    return base_url
 
 
 def _attribute(node, name: str) -> str:

@@ -68,6 +68,76 @@ Feature hashing uses FNV-1a 32-bit over UTF-8 bytes with offset basis
 `0x811C9DC5`, prime `0x01000193`, and arithmetic modulo `2^32`. Text features
 map into exactly `2^18` buckets with non-negative values.
 
+URL numeric features are computed over the raw URL string as Unicode code
+points, without NFKC normalization. `url_length`, `domain_length`, and
+`tld_length` are code-point lengths. `letter_count` counts code points whose
+Unicode General_Category starts with `L`; `digit_count` counts code points whose
+General_Category starts with `N`; `special_count` counts code points whose
+General_Category starts with neither `L` nor `N`. Browser scoring uses
+ECMAScript Unicode property escapes `\p{L}` and `\p{N}` with the `u` flag;
+Python mirrors this with `unicodedata.category`.
+
+Feature-side URL authority parsing is frozen, no-network, and deliberately not
+the Python `urllib.parse` or browser WHATWG parser. The scheme is recognized
+only from the first literal `://`. If there is no literal scheme and the input
+starts with `//`, those two slashes are skipped for protocol-relative input;
+otherwise authority parsing starts at the first code point. The authority ends
+at the first literal `/`, `?`, or `#`. The last `@` removes userinfo. A
+bracketed host starts with `[` and uses the content through the first `]`, or
+the remaining content when `]` is absent. An unbracketed host always strips the
+final ASCII colon component, regardless of whether the text after the colon is
+numeric. No Unicode normalization, IDNA conversion, percent decoding, network
+lookup, or validity rejection is applied.
+
+Feature-side IP literal classification uses the host text emitted by that
+authority parser. IPv4 is true only for exactly four ASCII decimal components
+separated by `.`, each `0` or a non-zero digit followed by up to two digits,
+with integer value no greater than 255. IPv6 is true only for ASCII hex, `.`,
+and `:` host text containing `:`; it allows at most one `::`, requires every
+explicit hex group to be 1-4 hex digits, requires exactly eight groups without
+`::`, and requires fewer than eight explicit groups with `::`. A final dotted
+IPv4 tail is allowed only after the final `:` and counts as two IPv6 groups
+after satisfying the same IPv4 rule. Zone IDs, IPvFuture, non-ASCII digits, and
+other address forms are not IP literals.
+
+Feature-side suffix handling is frozen and deliberately browser-computable. It
+does not call `tldextract`, fetch the Public Suffix List, or use reputation or
+network data. Hosts are lowercased, split on `.`, and empty labels are dropped.
+Empty hosts and IP literals have suffix `""` and subdomain count `0`. Otherwise,
+if at least one label precedes the longest exact trailing suffix in
+`FROZEN_MULTI_LABEL_SUFFIXES`, that suffix is used and
+`subdomain_count = max(0, label_count - suffix_label_count - 1)`. If no frozen
+multi-label suffix matches, the final host label is the suffix; known single
+label suffixes use `max(0, label_count - 2)`, and unknown single-label suffixes
+use `max(0, label_count - 1)`.
+
+The frozen suffix catalogs for `phishme-features-v1` are:
+
+```python
+FROZEN_SINGLE_LABEL_SUFFIXES = (
+    "ai", "app", "au", "biz", "br", "cn", "co", "com", "dev",
+    "edu", "gov", "info", "int", "io", "jp", "kr", "mil", "mx",
+    "net", "nz", "org", "pl", "sa", "sg", "th", "tr", "uk", "us",
+    "za",
+)
+FROZEN_MULTI_LABEL_SUFFIXES = (
+    "ac.th", "ac.uk", "co.jp", "co.kr", "co.nz", "co.th", "co.uk",
+    "co.za", "com.au", "com.br", "com.cn", "com.mx", "com.pl",
+    "com.sa", "com.sg", "com.tr", "edu.au", "go.th", "gov.au",
+    "gov.uk", "ltd.uk", "me.uk", "ne.jp", "net.au", "net.nz",
+    "or.jp", "or.th", "org.nz", "org.uk",
+)
+```
+
+DOM reference classification uses the same feature-side suffix algorithm.
+Empty strings, fragments, and references beginning with `javascript:`,
+`mailto:`, `tel:`, `data:`, or `about:` are empty references. Relative
+references resolve to the base host. Only references containing literal `://`
+or beginning with `//` are absolute for feature-side domain classification.
+Absolute and protocol-relative references are self references when their
+feature-side registrable domain equals the base feature-side registrable
+domain, and external otherwise.
+
 The frozen feature constants are:
 
 ```python

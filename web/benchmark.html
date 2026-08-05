@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>phishMe Scorer Benchmark</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f5f7fa;
+        color: #17202a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+      }
+
+      main {
+        width: min(920px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 40px 0;
+      }
+
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 24px;
+        border-bottom: 1px solid #d8dee8;
+        padding-bottom: 18px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.65rem;
+        line-height: 1.2;
+        font-weight: 650;
+      }
+
+      label {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 40px;
+        border: 1px solid #b8c2d1;
+        border-radius: 6px;
+        background: #ffffff;
+        padding: 8px 12px;
+        font-size: 0.95rem;
+      }
+
+      input[type="file"] {
+        max-width: 280px;
+      }
+
+      .panel {
+        border: 1px solid #d8dee8;
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 18px;
+      }
+
+      .status {
+        margin: 0 0 12px;
+        color: #4a5565;
+        font-size: 0.95rem;
+      }
+
+      pre {
+        min-height: 360px;
+        overflow: auto;
+        margin: 0;
+        border-radius: 6px;
+        background: #111827;
+        color: #eef2ff;
+        padding: 16px;
+        font-size: 0.9rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>phishMe Scorer Benchmark</h1>
+        <label>
+          Artifact
+          <input id="artifact" type="file" accept="application/json,.json">
+        </label>
+      </header>
+
+      <section class="panel" aria-live="polite">
+        <p id="status" class="status">Select a model artifact to run the browser benchmark.</p>
+        <pre id="output">{}</pre>
+      </section>
+    </main>
+
+    <script type="module">
+      import { scoreRecord } from "./scorer.js";
+
+      const WARMUP_COUNT = 20;
+      const MEASURED_COUNT = 200;
+      const BYTE_BUDGET = 25 * 1024 * 1024;
+      const P95_BUDGET_MS = 250;
+      const records = Object.freeze([
+        Object.freeze({
+          url: "https://accounts.example.com/login?next=/settings",
+          title: "Account sign in",
+          dom: Object.freeze({
+            html_line_count: 74,
+            largest_line_length: 180,
+            iframe_count: 0,
+            image_count: 4,
+            css_count: 2,
+            javascript_count: 3,
+            self_ref_count: 12,
+            empty_ref_count: 1,
+            external_ref_count: 2,
+            has_title: 1,
+            has_favicon: 1,
+            is_responsive: 1,
+            has_description: 1,
+            external_form_submit: 0,
+            has_social: 1,
+            has_submit_button: 1,
+            has_hidden_fields: 1,
+            has_password_field: 1,
+            mentions_bank: 0,
+            mentions_pay: 1,
+            mentions_crypto: 0,
+            has_copyright: 1,
+          }),
+        }),
+        Object.freeze({
+          url: "http://198.51.100.44/verify/%E2%9C%93?session=abc&step=2",
+          title: "Security verification required",
+          dom: Object.freeze({
+            html_line_count: 31,
+            largest_line_length: 620,
+            iframe_count: 2,
+            image_count: 1,
+            css_count: 0,
+            javascript_count: 6,
+            self_ref_count: 1,
+            empty_ref_count: 4,
+            external_ref_count: 8,
+            has_title: 1,
+            has_favicon: 0,
+            is_responsive: 0,
+            has_description: 0,
+            external_form_submit: 1,
+            has_social: 0,
+            has_submit_button: 1,
+            has_hidden_fields: 1,
+            has_password_field: 1,
+            mentions_bank: 1,
+            mentions_pay: 1,
+            mentions_crypto: 1,
+            has_copyright: 0,
+          }),
+        }),
+        Object.freeze({
+          url: "https://shop.example.net/help/orders",
+          title: "Order support",
+          dom: Object.freeze({
+            html_line_count: 118,
+            largest_line_length: 210,
+            iframe_count: 0,
+            image_count: 12,
+            css_count: 4,
+            javascript_count: 5,
+            self_ref_count: 34,
+            empty_ref_count: 0,
+            external_ref_count: 5,
+            has_title: 1,
+            has_favicon: 1,
+            is_responsive: 1,
+            has_description: 1,
+            external_form_submit: 0,
+            has_social: 1,
+            has_submit_button: 0,
+            has_hidden_fields: 0,
+            has_password_field: 0,
+            mentions_bank: 0,
+            mentions_pay: 0,
+            mentions_crypto: 0,
+            has_copyright: 1,
+          }),
+        }),
+      ]);
+
+      const input = document.querySelector("#artifact");
+      const status = document.querySelector("#status");
+      const output = document.querySelector("#output");
+
+      input.addEventListener("change", async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+
+        status.textContent = "Running benchmark.";
+        output.textContent = "{}";
+
+        try {
+          const text = await file.text();
+          const model = JSON.parse(text);
+          const payloadBytes = new TextEncoder().encode(text).byteLength;
+
+          for (let index = 0; index < WARMUP_COUNT; index += 1) {
+            scoreRecord(model, records[index % records.length]);
+          }
+
+          const durations = [];
+          for (let index = 0; index < MEASURED_COUNT; index += 1) {
+            const record = records[index % records.length];
+            const startedAt = performance.now();
+            scoreRecord(model, record);
+            durations.push(performance.now() - startedAt);
+          }
+          durations.sort((left, right) => left - right);
+
+          const report = {
+            userAgent: navigator.userAgent,
+            payloadBytes,
+            sampleCount: MEASURED_COUNT,
+            p50Ms: percentile(durations, 0.5),
+            p95Ms: percentile(durations, 0.95),
+            maxMs: durations[durations.length - 1],
+            withinPayloadBudget: payloadBytes <= BYTE_BUDGET,
+            withinLatencyBudget: percentile(durations, 0.95) <= P95_BUDGET_MS,
+          };
+
+          status.textContent = "Benchmark complete.";
+          output.textContent = JSON.stringify(report, null, 2);
+        } catch (error) {
+          status.textContent = "Benchmark failed.";
+          output.textContent = JSON.stringify({ error: String(error?.message ?? error) }, null, 2);
+        }
+      });
+
+      function percentile(values, ratio) {
+        if (!values.length) return 0;
+        return values[Math.floor((values.length - 1) * ratio)];
+      }
+    </script>
+  </body>
+</html>
