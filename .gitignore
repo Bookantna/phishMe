@@ -1,0 +1,22 @@
+# Local source material and generated ML artifacts
+dataset/
+paper/
+data/
+artifacts/
+checkpoints/
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS and editors
+.DS_Store
+.vscode/
+.idea/
