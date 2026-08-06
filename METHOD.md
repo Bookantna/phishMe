@@ -200,9 +200,40 @@ test scoring.
 Primary metrics are average precision and F1 at the validation-selected
 threshold. Accuracy is secondary and cannot alone justify model selection.
 
-Low-base-rate evaluation is reported at 0.05%, 0.1%, 0.5%, 1%, and 5% phishing
-base rates. phishMe versus PhishLang comparisons use paired bootstrap estimates
-for average-precision and F1 differences on the same frozen sample IDs.
+Low-base-rate evaluation is reported at exact requested phishing prevalences
+`0.0005`, `0.001`, `0.005`, `0.01`, and `0.05`. For a requested prevalence
+`p`, a base-rate manifest is a deterministic shuffled array of original row
+indices. With `n_neg` available benign examples, the normal case keeps every
+benign example and samples `round(p * n_neg / (1 - p))` phishing examples
+without replacement. If there are not enough phishing examples, the manifest
+keeps every phishing example and samples
+`round(n_pos * (1 - p) / p)` benign examples without replacement, capped to the
+available benign count. Manifests never duplicate rows.
+
+Base-rate reports store requested prevalence, actual selected prevalence, class
+counts, selected original indices, selected frozen sample IDs, metrics from
+`metrics_report`, and a SHA-256 over the canonical UTF-8 strict JSON sample-ID
+list. The canonical list hash is computed from
+`json.dumps(selected_sample_ids, separators=(",", ":"), ensure_ascii=False,
+allow_nan=False).encode("utf-8")`.
+
+phishMe versus PhishLang comparisons use paired bootstrap estimates for
+average-precision and F1 differences on the same frozen sample IDs. The
+controlled PhishLang adapter reads a frozen CSV with at least
+`sample_id,label,html` and writes prediction CSV columns exactly
+`sample_id,label,score,model,source_commit` in the same order. The official
+mode uses a clean checkout of `https://github.com/UTA-SPRLab/phishlang.git`,
+imports `generate_text_representation` from
+`src/patched_parser_prediction.py`, loads the local `src/model` with
+`MobileBertTokenizer` and `MobileBertForSequenceClassification` using local
+files only, records the clean Git commit, records a deterministic SHA-256 over
+the sorted model-tree file hash manifest, and preserves the official
+short-input behavior where no full 128-token window yields phishing probability
+`0.0`. The adapter's `batch_size` only bounds CSV input chunks; it is not
+vectorized MobileBERT batching. Each sample keeps the official per-sample
+128-token window and 64-token stride semantics. Corrected short-input
+sensitivity results, if ever produced, must use a distinct model label and
+separate output.
 
 Runtime acceptance gates are an exported browser payload no larger than 25 MB
 and Chrome p95 inference no slower than 250 ms per page.
@@ -215,5 +246,6 @@ live DOM available to a Chrome extension. Linear models can miss semantic and
 nonlinear deception. Feature hashing introduces collisions. Base rates and
 attacker behavior drift over time. Dataset labels and collection methods may
 encode source artifacts. Offline success does not prove production readiness or
-long-term evasion resistance. A controlled PhishLang comparison depends on a
-runnable official artifact.
+long-term evasion resistance. The controlled PhishLang comparison has not yet
+been run in cloud with the official model, paired intervals are not yet
+available, and the Chrome p95 latency gate is still missing.

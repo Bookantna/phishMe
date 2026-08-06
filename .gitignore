@@ -5,6 +5,7 @@ data/
 artifacts/
 checkpoints/
 .cache/
+external/
 
 # Python
 __pycache__/
