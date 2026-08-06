@@ -42,8 +42,23 @@ achieved test average precision `0.9999888939542867`, F1
 split hashes, and artifact hashes are recorded in `Implement.md`; generated
 artifacts remain excluded from Git.
 
+Test-verified cloud interface; the local network attempt failed and Colab execution is pending:
+
+- `python -m phishme phresh-smoke --limit 1000 --output DIR`
+
+`phresh-smoke` streams the pinned PhreshPhish Hugging Face train split, derives
+the pinned temporal cutoff from projected `date,label` columns, checkpoints a
+bounded smoke model under `DIR/checkpoints/`, and writes `DIR/model.json` plus
+`DIR/run.json`. Training records are always filtered to `date` values strictly
+before the cutoff; rows at or after the cutoff are never used for training in
+smoke or full PhreshPhish modes. The `datasets` dependency is optional and lazy;
+install `.[cloud]` before running this command. Smoke artifacts use threshold
+`0.5` only as a plumbing check and do not claim benchmark metrics.
+
 Planned or separately verified commands:
 
-- `python -m phishme phresh-smoke`
 - `node --test web/parity.test.mjs` (verified: seven tests passed)
 - Open `web/benchmark.html` in Chrome
+
+The exact network smoke command must be rerun in Colab/a networked host:
+`python -m phishme phresh-smoke --limit 1000 --output artifacts/phresh-smoke`.

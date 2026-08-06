@@ -1,9 +1,11 @@
 # phishMe Implementation Log
 
 ## Status
+- Complete: Task 7 local PHRESH streaming/checkpoint interfaces and Colab notebook.
 - Complete: Task 6 end-to-end local CLI and real PhiUSIIL baseline.
 - Complete: Task 2 canonical PhiUSIIL adapter and leakage-safe local split.
-- Blocked: full PhreshPhish training requires a cloud runtime.
+- Pending: Colab PhreshPhish smoke after the host network failure; full PhreshPhish training
+  remains a cloud/runtime task.
 - Not run: controlled PhishLang comparison.
 
 ## Commands and observed results
@@ -68,6 +70,33 @@
   `fadf8a42991590c79e5e339c0939e8dc4cd8b072586f9f278baf31873a82aeee`.
 - Final Task 6 verification: `.venv/bin/python -m pytest -q` passed 51 tests,
   `node --test web/parity.test.mjs` passed seven tests, and Ruff passed.
+- `.venv/bin/python -m pytest tests/test_phresh.py -q` before Task 7 implementation:
+  failed during collection with `ModuleNotFoundError: No module named 'phishme.phresh'`.
+- `.venv/bin/python -m pytest tests/test_phresh.py -q` after Task 7 implementation:
+  `11 passed in 0.12s`.
+- `.venv/bin/python - <<'PY' ... PY` notebook validation for
+  `notebooks/phishme_colab.ipynb`: nbformat validation succeeded and printed `8`.
+- `.venv/bin/python -m phishme phresh-smoke --help`: exited 0 and showed
+  `--limit`, required `--output`, `--alpha`, `--batch-size`, `--seed`, and
+  `--no-resume`.
+- Final Task 7 local verification: `.venv/bin/python -m pytest -q` passed
+  `62` tests in `6.04s`; `.venv/bin/ruff check .` reported `All checks passed!`;
+  `node --test web/parity.test.mjs` passed seven tests; and
+  `node --check web/scorer.js && node --check web/parity.test.mjs && git diff --check`
+  exited 0.
+- Task 7 network-failure hardening red run:
+  `.venv/bin/python -m pytest tests/test_phresh.py -q` failed with `11 failed, 17 passed`
+  before the classifier/client-reset/cutoff-reconstruction implementation.
+- Task 7 network-failure hardening focused green run:
+  `.venv/bin/python -m pytest tests/test_phresh.py -q` passed `28 passed in 2.31s`.
+- Task 7 network-failure hardening final verification:
+  `.venv/bin/python -m pytest -q` passed `79 passed in 8.42s`;
+  `.venv/bin/ruff check .` reported `All checks passed!`;
+  `node --test web/parity.test.mjs` passed seven tests;
+  `node --check web/scorer.js` exited 0;
+  `node --check web/parity.test.mjs` exited 0;
+  notebook validation printed `nbformat valid: 8 cells`; and
+  `git diff --check` exited 0.
 
 ## Decisions and deviations
 - Used `.venv/bin/python` because the shell `python` resolves to a different virtualenv outside
@@ -87,12 +116,33 @@
 - The executable pipeline was committed before the real baseline so `run.json` records
   the exact source commit used. The observed baseline was then recorded separately;
   generated `artifacts/` remain ignored.
+- Task 7 keeps `datasets` as a lazy optional import inside `phishme.phresh`; base
+  imports and tests do not require the cloud extra.
+- Task 7 `iter_phresh` yields parsed canonical records without an `html` field.
+  Missing URL/label/date rows become reject records for stream counters; non-empty
+  unknown labels, unsupported revisions, and schema drift are hard failures.
+- Task 7 checkpoints use `checkpoints/checkpoint.json` metadata plus versioned
+  `model-<position>-<hash>.joblib` files. A new joblib is fsynced and atomically
+  moved before metadata is atomically replaced, so the previous valid metadata keeps
+  pointing at a valid old model if metadata replacement fails.
+- Task 7 retry classification now covers built-in stream/network exceptions, lazy optional
+  `httpx.TransportError`, and only the exact closed Hugging Face client
+  `RuntimeError("Cannot send a request, as the client has been closed.")`. Retries close
+  the Hugging Face global client before iterator reconstruction; schema, label, generic
+  runtime, type, and programming failures remain non-retryable.
 
 ## Failed or negative results
 - Expected red test run confirmed missing `phishme.data` before implementation.
 - Expected Task 6 red test run confirmed missing `phishme.__main__` before CLI implementation.
+- Expected Task 7 red test run confirmed missing `phishme.phresh` before implementation.
 - The shell `python -m pytest tests/test_pipeline.py -q` command resolved to a different
   virtualenv without pytest; verification used `.venv/bin/python`.
+- The host PhreshPhish smoke attempt produced zero artifacts. The pinned cutoff probe failed
+  while reading `train-001.parquet` after a read timeout/DNS failure, and Hugging Face
+  ultimately raised `RuntimeError: Cannot send a request, as the client has been closed.`
+  No PhiUSIIL or other substitute data was used. After the failure, PyArrow shutdown
+  deadlocked and the process required termination. This is a host network failure, not an
+  interface block; Colab smoke is still required.
 
 ## Artifacts
 - `src/phishme/data.py`
@@ -101,6 +151,37 @@
 - `src/phishme/__main__.py`
 - `tests/conftest.py`
 - `tests/test_pipeline.py`
+- `src/phishme/phresh.py`
+- `tests/test_phresh.py`
+- `notebooks/phishme_colab.ipynb`
 
 ## Next actions
-- Implement the pinned PhreshPhish streaming and resumable Colab workflow.
+- Colab/networked runtime: run
+  `python -m phishme phresh-smoke --limit 1000 --output artifacts/phresh-smoke`
+  and record the exact success or failure without substituting PhiUSIIL data.
+
+## Host hardening
+- Red: `.venv/bin/python -m pytest tests/test_phresh.py -q` failed with
+  `3 failed, 14 passed` before the hardening implementation. The failing tests
+  covered checkpoint metadata count consistency, strict-before-cutoff smoke CLI
+  helper behavior, and notebook smoke/full train filtering.
+- Green: `.venv/bin/python -m pytest tests/test_phresh.py -q` passed
+  `17 passed in 0.16s` after implementation.
+- Green: `.venv/bin/python -m pytest -q` passed `68 passed in 6.10s`.
+- Green: `.venv/bin/ruff check .` reported `All checks passed!`.
+- Green: `node --test web/parity.test.mjs` passed seven tests.
+- Green: notebook validation for `notebooks/phishme_colab.ipynb` succeeded with
+  `nbformat valid: 8 cells`.
+- Green: `node --check web/scorer.js`, `node --check web/parity.test.mjs`, and
+  `git diff --check` exited 0.
+- Host PhreshPhish smoke was attempted but failed during pinned cutoff streaming with the
+  `train-001.parquet` timeout/DNS/client-closed sequence described above; Colab smoke and
+  full-data training remain pending for a networked/cloud runtime.
+- Final Task 7 verification after independent review resolution:
+  `.venv/bin/python -m pytest tests/test_phresh.py -q` passed `29` tests,
+  `.venv/bin/python -m pytest -q` passed `80` tests, Node passed seven tests,
+  Ruff passed, the eight-cell notebook validated with nbformat, JavaScript syntax
+  checks passed, and `git diff --check` passed.
+- Review finding resolved: production `PhreshTrainConfig` now defaults to a positive
+  one-second initial retry delay with a 2x multiplier and at most three attempts;
+  retry-focused unit tests explicitly set zero delay to remain fast.

@@ -74,6 +74,22 @@ def _build_parser() -> argparse.ArgumentParser:
     local.add_argument("--seed", default=42, type=int, help="split and training seed")
     local.set_defaults(func=_cmd_local)
 
+    phresh_smoke = subparsers.add_parser(
+        "phresh-smoke",
+        help="run a bounded pinned PhreshPhish streaming smoke train",
+    )
+    phresh_smoke.add_argument("--limit", default=1000, type=int, help="maximum train rows to stream")
+    phresh_smoke.add_argument("--output", required=True, type=Path, help="directory for smoke artifacts")
+    phresh_smoke.add_argument("--alpha", default=1e-4, type=float, help="SGD L2 regularization")
+    phresh_smoke.add_argument("--batch-size", default=256, type=int, help="streaming SGD batch size")
+    phresh_smoke.add_argument("--seed", default=42, type=int, help="training seed")
+    phresh_smoke.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="fail if a compatible smoke checkpoint already exists",
+    )
+    phresh_smoke.set_defaults(func=_cmd_phresh_smoke)
+
     return parser
 
 
@@ -249,6 +265,129 @@ def _cmd_local(args: argparse.Namespace) -> None:
             "artifacts": run_artifacts,
         }
     )
+
+
+def _cmd_phresh_smoke(args: argparse.Namespace) -> None:
+    from phishme import phresh
+
+    limit = _validate_integer("limit", args.limit, minimum=1)
+    batch_size = _validate_integer("batch_size", args.batch_size, minimum=1)
+    seed = _validate_integer("seed", args.seed, minimum=0)
+    output_dir = _validate_phresh_output_dir(args.output)
+    paths = _phresh_smoke_paths(output_dir)
+    limitations = [
+        "bounded smoke sample only; not a benchmark",
+        "threshold 0.5 is smoke-only and not validation-selected",
+        "no official test metrics are claimed by phresh-smoke",
+    ]
+
+    cutoff = phresh.derive_temporal_cutoff(phresh.PHRESH_REVISION)
+    config = phresh.PhreshTrainConfig(
+        alpha=float(args.alpha),
+        batch_size=batch_size,
+        seed=seed,
+        include_dom=True,
+        split="train",
+        cutoff=cutoff,
+    )
+    model = phresh.train_stream(
+        lambda: _phresh_smoke_train_records(phresh, limit=limit, cutoff=cutoff),
+        paths["checkpoints"],
+        config,
+        resume=not bool(args.no_resume),
+    )
+    _, checkpoint = phresh.validate_checkpoint(paths["checkpoint.json"], config)
+
+    export_model(
+        model,
+        0.5,
+        True,
+        {
+            "dataset": phresh.PHRESH_DATASET,
+            "dataset_revision": phresh.PHRESH_REVISION,
+            "feature_version": FEATURE_VERSION,
+            "seed": seed,
+            "split": "train",
+            "cutoff": cutoff,
+            "checkpoint": {
+                "processed_position": checkpoint["processed_position"],
+                "model_joblib": checkpoint["model_joblib"],
+                "model_sha256": checkpoint["model_sha256"],
+            },
+            "threshold_source": "smoke_only_not_validation_selected",
+            "limitations": limitations,
+        },
+        paths["model.json"],
+    )
+
+    artifacts = {
+        "model.json": _file_manifest(paths["model.json"]),
+        "checkpoints/checkpoint.json": _file_manifest(paths["checkpoint.json"]),
+        f"checkpoints/{checkpoint['model_joblib']}": _file_manifest(
+            paths["checkpoints"] / checkpoint["model_joblib"]
+        ),
+    }
+    manifest = {
+        "schema": "phishme-phresh-smoke-run-v1",
+        "command": "phresh-smoke",
+        "normalized_arguments": {
+            "command": "phresh-smoke",
+            "limit": limit,
+            "output": str(output_dir),
+            "alpha": float(config.alpha),
+            "batch_size": batch_size,
+            "seed": seed,
+            "resume": not bool(args.no_resume),
+        },
+        "dataset": {
+            "name": phresh.PHRESH_DATASET,
+            "revision": phresh.PHRESH_REVISION,
+            "split": "train",
+        },
+        "feature_version": FEATURE_VERSION,
+        "cutoff": {
+            "value": cutoff,
+            "percentile": phresh.CUTOFF_PERCENTILE,
+            "index_rule": phresh.CUTOFF_INDEX_RULE,
+        },
+        "training": {
+            "processed_position": checkpoint["processed_position"],
+            "accepted_examples": checkpoint["class_counts"]["0"] + checkpoint["class_counts"]["1"],
+            "class_counts": checkpoint["class_counts"],
+            "parse_counts": checkpoint["parse_counts"],
+            "reject_counts": checkpoint["reject_counts"],
+            "checkpoint": checkpoint,
+        },
+        "model": {
+            "threshold": 0.5,
+            "threshold_source": "smoke_only_not_validation_selected",
+        },
+        "limitations": limitations,
+        "artifacts": artifacts,
+    }
+    _write_json_atomically(manifest, paths["run.json"])
+    _print_json(
+        {
+            "schema": "phishme-phresh-smoke-summary-v1",
+            "output": str(output_dir),
+            "processed_position": checkpoint["processed_position"],
+            "accepted_examples": manifest["training"]["accepted_examples"],
+            "artifacts": {
+                **artifacts,
+                "run.json": _file_manifest(paths["run.json"]),
+            },
+            "limitations": limitations,
+        }
+    )
+
+
+def _phresh_smoke_train_records(phresh_module, *, limit: int, cutoff: str):
+    base = phresh_module.iter_phresh(
+        "train",
+        revision=phresh_module.PHRESH_REVISION,
+        limit=limit,
+    )
+    return phresh_module.filter_by_cutoff(base, cutoff, keep="before")
 
 
 def _train_validation_candidates(
@@ -446,12 +585,30 @@ def _validate_output_dir(path: Path) -> Path:
     return resolved
 
 
+def _validate_phresh_output_dir(path: Path) -> Path:
+    resolved = path.expanduser().resolve(strict=False)
+    if resolved.exists() and not resolved.is_dir():
+        raise ValueError(f"--output must be a directory: {resolved}")
+    resolved.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
 def _artifact_paths(output_dir: Path) -> dict[str, Path]:
     return {
         "run.json": output_dir / "run.json",
         "splits.json": output_dir / "splits.json",
         "model.json": output_dir / "model.json",
         "test-metrics.json": output_dir / "test-metrics.json",
+    }
+
+
+def _phresh_smoke_paths(output_dir: Path) -> dict[str, Path]:
+    checkpoints = output_dir / "checkpoints"
+    return {
+        "run.json": output_dir / "run.json",
+        "model.json": output_dir / "model.json",
+        "checkpoints": checkpoints,
+        "checkpoint.json": checkpoints / "checkpoint.json",
     }
 
 
