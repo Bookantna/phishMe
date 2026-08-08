@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from phishme.data import _sample_id, canonicalize_url, registrable_domain
+from phishme.data import _sample_id, registrable_domain
 from phishme.features import NUMERIC_FEATURES, _html_features_with_status
 
 SPLIT_CSV_NAME = "train_test_val_split_30.csv"
@@ -43,7 +43,7 @@ def load_phishpedia(
         html_path = _html_path(row, phish_html_root, benign_html_root)
         if html_path is None or not html_path.exists():
             continue
-        title, dom_values, status = _html_features_with_status(
+        title, dom_values, _ = _html_features_with_status(
             row["url"], html_path.read_text(errors="replace")
         )
         canonical = {
