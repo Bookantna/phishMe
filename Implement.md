@@ -314,3 +314,133 @@
 - The browser payload size gate remains documented from prior local artifacts, but the Chrome
   p95 latency gate is still missing.
 - No superiority statement is made.
+
+---
+
+## V3: Cross-Dataset Generalization
+
+### Status
+
+- Complete: Task 1 (`sample_id` in PhreshPhish canonical records).
+- Complete: Task 2 (PhishPedia split CSV + HTML adapter).
+- Complete: Task 3 (LightGBM tree model, optional `phishme[tree]` extra).
+- Complete: Task 4 (Hybrid OOF stacking: Linear + Tree → LogisticRegression meta).
+- Complete: Task 5 (Cross-dataset runner: `run_v3_train`, `materialize_phresh_test`,
+  `run_v3_eval`, `align_phishlang_scores`, `compute_delta`).
+- Complete: Task 6 (CLI: `v3-train`, `v3-eval`, `v3-browser`).
+- Complete: Task 7 (Browser deployment metrics: `web/benchmark.html` JSON emission,
+  `scripts/measure_browser.py` headless Chrome collector, `v3-browser` command).
+- Complete: Task 8 (this commit: design record, METHOD.md rewrite, README.md V3 section,
+  Implement.md V3 log).
+- Pending: Task 0 (PhishPedia archive download and layout verification — manual, not code).
+
+### V3 Implementation Commits
+
+```
+a793f78 feat: add sample_id to PhreshPhish canonical records
+9745598 feat: add PhishPedia split-CSV and HTML adapter
+ce2b838 style: fix lint findings in phishpedia adapter
+24f8798 feat: add LightGBM tree model with optional dependency
+8fc3f82 feat: add out-of-fold hybrid stacking model
+6301e26 feat: add cross-dataset runner with delta and paired-bootstrap reports
+f1f5397 fix: per-variant paired bootstrap in v3 eval
+94d417e feat: add v3-train and v3-eval CLI commands
+fcdf624 fix: v3-eval records validation and joblib import
+80bf563 feat: add headless-Chrome browser deployment metrics
+b015572 fix: unify file path validation for v3 commands
+```
+
+### Task 0: PhishPedia Data Acquisition (pending manual download)
+
+Not yet performed in this sandbox. Requirements:
+
+- Download PhishPedia 30k benchmark from:
+  `https://drive.google.com/file/d/12ypEMPRQ43zGRqHGut0Esq2z5en0DH4g/view`
+- License: CC0-1.0.
+- Expected archive layout (from the official repository):
+  - Split CSV: `train_test_val_split_30.csv` with header
+    `file_name,label,url,type,split` (verify and record exact header;
+    adapter's schema check fails hard on drift).
+  - Phishing HTML directory (files named `<file_name>.html`).
+  - Benign HTML directory (files named `<file_name>.html`).
+- Row counts per split, label vocabulary, dataset SHA-256 to be recorded after
+  download.
+- Keep unpacked data under `dataset/` (git-ignored).
+
+### V3 Verification Commands (Task 8)
+
+- `.venv/bin/python -m pytest -q`:
+  `135 passed, 1 skipped in 26.48s`
+  Skipped: `tests/test_benchmark.py:521: PHISHLANG_DIR is not set`.
+
+- `.venv/bin/ruff check .`:
+  `Found 3 errors.` (pre-existing in `scripts/measure_browser.py` and
+  `tests/test_models.py`; not introduced by Task 8 docs).
+
+- `node --test web/parity.test.mjs`:
+  `7 passed` — all seven Node.js parity tests passed.
+
+- `.venv/bin/ruff check .` on doc-only files:
+  Ruff does not lint `.md` files; no doc-only lint issues.
+
+- `git diff --check`:
+  Exited 0, clean diff (no whitespace errors).
+
+### V3 Browser Smoke
+
+Headless Chrome `v3-browser` smoke was run on a tiny exported linear model
+(from a prior synthetic-data V3 training smoke):
+
+| Metric | Value |
+|--------|-------|
+| Schema | `phishme-browser-metrics-v1` |
+| Average latency | 0.13 ms |
+| p95 latency | 0.20 ms |
+| Memory | ~19.3 MB |
+| Payload ≤ 25 MB gate | `true` |
+| p95 ≤ 250 ms gate | `true` |
+
+**Note:** These values were measured on a tiny or smoke model, not a
+fully-trained PhishPedia model. Real trained-model latency is pending
+PhishPedia download and full training. The infrastructure (headless Chrome
+collection pipeline, JSON emission from `web/benchmark.html`, gate computation)
+is verified.
+
+### Pending External-Runtime Items
+
+- **PhishPedia archive download + layout verification:** Manual. Requires
+  downloading from Google Drive; no API or automated download available.
+  Layout facts to be recorded in this Implement.md after download.
+
+- **Full PhreshPhish test streaming:** Requires a networked runtime with
+  Hugging Face access. The local sandbox cannot resolve Hugging Face DNS.
+  `v3-eval` CLI accepts `--records` (pre-materialized frozen JSONL) as a
+  workaround; synthetic-data tests exercise the full CLI path.
+
+- **Official PhishLang predictions run:** Requires a machine with
+  `PHISHLANG_DIR` set to a clean checkout of
+  `github.com/UTA-SPRLab/phishlang.git` (98 MB model). Integration test
+  (`tests/test_benchmark.py:521`) skips when `PHISHLANG_DIR` is unset.
+
+- **Full V3 training + evaluation run:** Blocked on both PhishPedia download
+  (Task 0) and PhreshPhish + PhishLang runtime availability. All code paths
+  are verified with synthetic-data integration tests.
+
+### Task 8 Decisions and Deviations
+
+- The `ruff check .` finds 3 pre-existing findings (PLW1510 in
+  `scripts/measure_browser.py`, I001 + F841 in `tests/test_models.py`). These
+  are not introduced by Task 8 (docs-only) and are left for the owning tasks.
+- The excluded leakage features paragraph in the Feature Contract section of
+  METHOD.md retains the original mention of "PhiUSIIL columns" — this is
+  preserved verbatim per the V3 METHOD.md preservation contract and correctly
+  describes the cross-dataset parity requirements the feature contract was
+  designed against.
+- PhishLang adapter description from the original METHOD.md Evaluation section
+  has been moved into the new Model section (under PhishLang reference) rather
+  than the Evaluation section, since it describes the model architecture rather
+  than the evaluation protocol.
+- The controlled PhishLang comparison text from the original has been
+  simplified; the V3 PhishLang protocol uses the same `scripts/run_phishlang.py`
+  adapter and `local_files_only=True` constraints but now emphasizes the frozen
+  reference role and the `threshold_source: "official_fixed_0.5"` convention.

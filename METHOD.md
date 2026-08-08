@@ -2,14 +2,16 @@
 
 ## Research Question
 
-Can a regularized sparse linear classifier using URL character n-grams and
-browser-computable DOM features outperform PhishLang on the same PhreshPhish
-evaluation examples while remaining no larger than 25 MB and no slower than
-250 ms at p95 in Chrome?
+Can phishMe variants — a regularized sparse linear classifier (SGD log-loss),
+a LightGBM gradient-boosted tree, and an out-of-fold stacking hybrid — trained
+on the PhishPedia 30k benchmark generalize to the frozen PhreshPhish test
+split, and how do they compare against the official pretrained PhishLang
+MobileBERT reference on identical frozen sample IDs under paired bootstrap
+uncertainty and browser deployment constraints?
 
-Any claim of improvement over PhishLang requires identical frozen evaluation
-examples, paired uncertainty estimates, and satisfaction of the browser size and
-latency gates.
+Any claim of improvement over PhishLang requires identical frozen PhreshPhish
+test samples, paired bootstrap 95% confidence intervals, and satisfaction of the
+browser size (≤ 25 MB) and latency (p95 ≤ 250 ms) gates.
 
 ## Canonical Labels
 
@@ -19,34 +21,45 @@ unknown labels.
 
 ## Data Provenance and Licenses
 
-PhiUSIIL is expected locally at `dataset/PhiUSIIL_Phishing_URL_Dataset.csv`.
-The current project directory does not contain license metadata for that file,
-so raw rows and derivative redistributed data are excluded unless the license is
-independently verified.
+PhishPedia is the V3 training source, licensed CC0-1.0. The published benchmark
+is obtained from the official Google Drive link
+`https://drive.google.com/file/d/12ypEMPRQ43zGRqHGut0Esq2z5en0DH4g/view`
+(referenced from `github.com/lindsey98/Phishpedia`). It contains a split CSV
+(`train_test_val_split_30.csv`), a phishing HTML directory, and a benign HTML
+directory. The CSV columns include `file_name`, `url`, `label`, and optionally
+`type` and `split`. Labels are normalized from either the numeric `label` column
+or the `type` column. Unknown labels and missing HTML files are rejected.
 
-PhreshPhish is used through its Hugging Face dataset source, pinned to revision
-`eabec4b7a66324b79cc8a0ad856d1731dc26fe1a` for experiments. Its dataset card
-lists CC BY 4.0 and restricts use to anti-phishing research. Raw HTML is parsed
-inside the runtime and discarded rather than committed.
+PhreshPhish is the V3 frozen cross-dataset test set, used via its Hugging Face
+dataset source, pinned to revision
+`eabec4b7a66324b79cc8a0ad856d1731dc26fe1a`. Its dataset card lists CC BY 4.0
+and restricts use to anti-phishing research. Raw HTML is parsed inside the
+runtime and discarded rather than committed. PhreshPhish test examples are
+never used for training, threshold selection, or hyperparameter tuning.
 
 Dataset source, collection date, split membership, and labels disguised as
 metadata are never model features.
 
 ## Split Rules
 
-PhiUSIIL has no trustworthy temporal field, so it uses deterministic
-registrable-domain grouping. No registrable domain or sample ID may cross the
-training, validation, and test partitions. Each partition must contain both
-classes.
+PhishPedia uses its published official train/validation/test split from
+`train_test_val_split_30.csv` as-is. The CSV is never re-split by the project.
+Registrable-domain grouping is used only for duplicate and overlap accounting,
+not for re-partitioning.
 
 PhreshPhish preserves the official test split as untouched test data. The
 official training split is ordered by collection date; its final temporal portion
 is reserved for validation, and earlier examples are used for training. Test
 examples are never moved into training or validation.
 
-Combined-data experiments may add PhiUSIIL training data to PhreshPhish training
-data, but threshold selection remains validation-only and the untouched
-PhreshPhish test set remains frozen.
+In V3, the PhreshPhish test split is the sole cross-dataset test set. It is
+materialized once into a frozen JSONL of canonical records. Threshold selection
+for all phishMe variants occurs exclusively on PhishPedia validation data.
+PhishLang uses the official fixed threshold `0.5` without tuning. PhreshPhish
+scores and metrics are never used for threshold or hyperparameter selection.
+
+PhreshPhish train-split rows are never used in V3; the training source is
+PhishPedia only.
 
 ## Duplicate Definition
 
@@ -189,16 +202,76 @@ approximated silently.
 
 ## Model
 
+V3 evaluates four systems on the same frozen PhreshPhish test samples:
+
+### PhishLang (reference)
+
+PhishLang is the official pretrained MobileBERT model (`github.com/UTA-SPRLab/phishlang`),
+used as a fixed reference. It is never retrained on PhishPedia or any V3 data.
+Predictions use `generate_text_representation` from
+`src/patched_parser_prediction.py`, 128-token windows with 64-token stride,
+and `MobileBertForSequenceClassification` with `local_files_only=True`. The
+threshold is fixed at `0.5` (official untuned). PhishLang scores are aligned to
+phishMe scores by frozen `sample_id` for paired comparisons. Short inputs that
+produce no full 128-token window yield phishing probability `0.0` (official
+behavior).
+
+### Linear SGD
+
 The classifier is an SGD log-loss model equivalent to regularized logistic
 regression, implemented as `SGDClassifier(loss="log_loss", penalty="l2")` with
-incremental training support. Hyperparameters are selected only from validation
-data, and the operating threshold is selected once on validation data before any
-test scoring.
+incremental training support. Hyperparameters are selected by grid search over
+α ∈ {1e-5, 1e-4, 1e-3} on PhishPedia validation data (ranking by AP, F1,
+−α). Three training epochs, batch size 2048.
+
+### Tree (LightGBM)
+
+A gradient-boosted decision tree implemented as `LGBMClassifier` with grid
+search over n_estimators ∈ {100, 500}, num_leaves=31, learning_rate=0.1.
+Ranking by AP, F1, −n_estimators on PhishPedia validation. LightGBM is an
+optional dependency (`phishme[tree]`); tests use `pytest.importorskip`.
+
+### Hybrid OOF Stacking
+
+An out-of-fold stacking ensemble with two base models (Linear SGD at α=1e-4
+and LightGBM at n_estimators=300) and a `LogisticRegression` meta-classifier
+(C=1.0). The meta-classifier is trained on 3-fold stratified out-of-fold
+scores from the PhishPedia training split. After meta-training, both base
+models are refit on the full training frame. No hyperparameter grid is used
+for the hybrid; it is a single configuration. OOF score targets are never
+derived from PhishPedia validation or PhreshPhish data.
+
+All phishMe variants share the same `phishme-features-v1` vectorizer. The
+operating threshold for each variant is selected once on PhishPedia validation
+data before any PhreshPhish scoring.
 
 ## Evaluation
 
 Primary metrics are average precision and F1 at the validation-selected
 threshold. Accuracy is secondary and cannot alone justify model selection.
+
+### Cross-Dataset Metrics
+
+For each variant, after scoring the frozen PhreshPhish test:
+
+- **ΔAP** = validation_AP − PhreshPhish_AP
+- **ΔF1** = validation_F1 − PhreshPhish_F1
+
+Positive values represent generalization drop from the in-distribution
+validation set to the unseen test distribution. Secondary metrics (precision,
+recall, ROC-AUC, Brier, confusion matrix) are also reported.
+
+### Threshold Protocol
+
+For phishMe variants: thresholds are selected exclusively on PhishPedia
+validation data via `evaluate.select_threshold`, maximizing F1. These
+thresholds are then applied to PhreshPhish test scores without adjustment.
+
+For PhishLang: the threshold is fixed at `0.5` (official pretrained default)
+and recorded as `threshold_source: "official_fixed_0.5"`. No tuning is
+performed on any dataset.
+
+### Low-Base-Rate Evaluation
 
 Low-base-rate evaluation is reported at exact requested phishing prevalences
 `0.0005`, `0.001`, `0.005`, `0.01`, and `0.05`. For a requested prevalence
@@ -217,28 +290,46 @@ list. The canonical list hash is computed from
 `json.dumps(selected_sample_ids, separators=(",", ":"), ensure_ascii=False,
 allow_nan=False).encode("utf-8")`.
 
+### Paired Bootstrap
+
 phishMe versus PhishLang comparisons use paired bootstrap estimates for
-average-precision and F1 differences on the same frozen sample IDs. The
-controlled PhishLang adapter reads a frozen CSV with at least
-`sample_id,label,html` and writes prediction CSV columns exactly
-`sample_id,label,score,model,source_commit` in the same order. The official
-mode uses a clean checkout of `https://github.com/UTA-SPRLab/phishlang.git`,
-imports `generate_text_representation` from
-`src/patched_parser_prediction.py`, loads the local `src/model` with
-`MobileBertTokenizer` and `MobileBertForSequenceClassification` using local
-files only, records the clean Git commit, records a deterministic SHA-256 over
-the sorted model-tree file hash manifest, and preserves the official
-short-input behavior where no full 128-token window yields phishing probability
-`0.0`. The adapter's `batch_size` only bounds CSV input chunks; it is not
-vectorized MobileBERT batching. Each sample keeps the official per-sample
-128-token window and 64-token stride semantics. Corrected short-input
-sensitivity results, if ever produced, must use a distinct model label and
-separate output.
+average-precision and F1 differences on the same frozen sample IDs. Each
+variant's scores are aligned with PhishLang scores via `align_phishlang_scores`,
+which reorders both score vectors to identical row ordering by `sample_id` and
+validates label agreement. Paired bootstrap uses `evaluate.paired_bootstrap`
+with 10,000 resamples and seed 42. No superiority claim is made without a 95%
+confidence interval excluding zero.
+
+### Frozen Test Protocol
+
+The PhreshPhish test set is materialized once via `materialize_phresh_test` into
+a frozen JSONL file with canonical records carrying `url`, `title`, `date`,
+`label`, `sample_id`, `html`, and `dom_*` features. This file is the single
+source of truth for all cross-dataset scoring. Re-materialization on an existing
+frozen file fails. Scores, thresholds, and metrics are computed deterministically
+from this file.
+
+### Success Criteria
+
+| Tier | Requirement |
+|------|-------------|
+| **Bronze** | PhishPedia training completes; all three variants produce validation metrics; PhreshPhish frozen test scored; all Δ metrics and paired bootstrap intervals computed |
+| **Silver** | At least one phishMe variant achieves ΔAP 95% CI wholly above zero against PhishLang on identical frozen sample IDs |
+| **Gold** | Silver holds AND both browser gates pass (≤ 25 MB payload, ≤ 250 ms Chrome p95) |
+
+### Browser Deployment Gates
 
 Runtime acceptance gates are an exported browser payload no larger than 25 MB
-and Chrome p95 inference no slower than 250 ms per page.
+and Chrome p95 inference no slower than 250 ms per page. Browser metrics are
+collected via headless Chrome (`--headless=new --dump-dom
+--virtual-time-budget=30000`) running `web/benchmark.html` against the exported
+linear model artifact. Results are recorded in `phishme-browser-metrics-v1`
+schema with model bytes, extension bytes (web/ static files + model artifact),
+average latency, p95 latency, memory usage, and gate booleans.
 
 ## Limitations
+
+### V2 Limitations (still applicable)
 
 PhiUSIIL lacks a trustworthy temporal field, so its domain-grouped test is less
 realistic than the PhreshPhish temporal test. Offline HTML may differ from the
@@ -246,6 +337,38 @@ live DOM available to a Chrome extension. Linear models can miss semantic and
 nonlinear deception. Feature hashing introduces collisions. Base rates and
 attacker behavior drift over time. Dataset labels and collection methods may
 encode source artifacts. Offline success does not prove production readiness or
-long-term evasion resistance. The controlled PhishLang comparison has not yet
-been run in cloud with the official model, paired intervals are not yet
-available, and the Chrome p95 latency gate is still missing.
+long-term evasion resistance.
+
+### V3-Specific Limitations
+
+**PhishLang is not retrained on identical data.** PhishLang is the official
+pretrained MobileBERT reference. Any advantage PhishLang shows on PhreshPhish
+may stem from its own training distribution rather than superior generalization.
+Conversely, any phishMe advantage carries stronger evidence.
+
+**OOF stacking optimism.** The hybrid meta-classifier uses 3-fold out-of-fold
+scores computed on the PhishPedia training split. While these OOF scores are
+holdout estimates, the meta-classifier itself is trained on the same split.
+Residual optimism is bounded by validation-only threshold selection, but the
+hybrid may exhibit slightly inflated cross-dataset estimates relative to a
+strictly held-out stacking pipeline.
+
+**HTML-only proxy for PhishPedia.** PhishPedia pages are parsed from offline
+HTML files. The PhishPedia benchmark was originally designed for screenshot-based
+phishing detection; the V3 protocol uses HTML DOM features only, which may
+differ from the live-DOM behavior of the same pages.
+
+**Single frozen test set.** PhreshPhish test is one temporal distribution (phishing
+samples collected up to early 2023). Conclusions generalize only as far as that
+distribution and timeframe allow. No claim of universal cross-dataset
+generalization is made.
+
+**Browser gate measurement caveat.** The browser latency gates (p95 ≤ 250 ms,
+≤ 25 MB payload) have been verified with the infrastructure via headless Chrome
+smoke on a tiny exported model. Real trained-model latency measurements are
+pending full training on the downloaded PhishPedia corpus.
+
+**Pending external-runtime items.** Full PhreshPhish test streaming requires a
+networked runtime (Hugging Face access). The official PhishLang predictions CSV
+requires a machine with `PHISHLANG_DIR` (clean checkout + 98 MB model). Both are
+pending cloud execution; CLI interfaces are verified with synthetic data locally.
