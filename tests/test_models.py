@@ -1,12 +1,19 @@
 import numpy as np
 import pandas as pd
 import pytest
-from phishme.models import HybridConfig, TreeConfig, fit_hybrid, fit_tree, predict_hybrid_scores, predict_tree_scores
+
+from phishme.models import (
+    HybridConfig,
+    TreeConfig,
+    fit_hybrid,
+    fit_tree,
+    predict_hybrid_scores,
+    predict_tree_scores,
+)
 from phishme.train import TrainConfig
 
 
 def _synthetic_frame(n=120):
-    rng = np.random.default_rng(0)
     rows = []
     for i in range(n):
         phish = i % 2 == 1

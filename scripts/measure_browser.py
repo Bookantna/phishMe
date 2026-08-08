@@ -113,6 +113,7 @@ def run(chrome_bin: str, model_path: str | Path, output_dir: str | Path, *, port
                 capture_output=True,
                 text=True,
                 timeout=90,
+                check=False,
             )
 
             if result.returncode != 0:
