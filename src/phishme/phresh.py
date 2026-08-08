@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import SGDClassifier
 
+from .data import canonicalize_url
 from .features import (
     FEATURE_VERSION,
     HASH_DIM,
@@ -458,6 +459,7 @@ def _canonicalize_raw_phresh_row(row: Mapping) -> dict:
         "title": title,
         "date": date,
         "label": label,
+        "sample_id": hashlib.sha256(canonicalize_url(url).encode("utf-8")).hexdigest(),
         "_parse_status": status,
     }
     canonical.update({f"dom_{name}": float(dom_values[name]) for name in NUMERIC_FEATURES})

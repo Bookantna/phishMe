@@ -734,3 +734,24 @@ def test_notebook_training_factory_filters_smoke_and_full_before_cutoff():
 
     assert 'return phresh.filter_by_cutoff(base, cutoff, keep="before")' in source
     assert "return base" not in source
+
+
+def test_canonical_record_includes_sample_id():
+    from hashlib import sha256
+
+    from phishme.data import canonicalize_url
+    from phishme.phresh import _canonicalize_raw_phresh_row
+
+    row = {
+        "url": "https://Example.com/a",
+        "html": "<title>x</title>",
+        "date": "2023-01-01",
+        "label": "phish",
+    }
+    record = _canonicalize_raw_phresh_row(row)
+
+    # Compute expected sample_id directly — do not hardcode a literal digest.
+    canonical = canonicalize_url("https://Example.com/a")
+    expected = sha256(canonical.encode("utf-8")).hexdigest()
+
+    assert record["sample_id"] == expected
