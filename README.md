@@ -90,7 +90,7 @@ Drive) and a networked runtime for PhreshPhish streaming:
 | Item | Status |
 |------|--------|
 | All 135 pytest tests + 1 skip | ✅ Passed locally (`env -u PHISHLANG_DIR`) |
-| Ruff lint | ✅ Clean on docs; 3 pre-existing findings in src/tests (not doc task) |
+| Ruff lint | ✅ Clean (`ruff check .` passes) |
 | Node parity (7 tests) | ✅ Passed |
 | CLI smoke with synthetic data | ✅ `v3-train`, `v3-eval`, `v3-browser` exercised |
 | Headless Chrome `v3-browser` smoke (tiny model) | ✅ avg 0.13 ms, p95 0.20 ms, ~19.3 MB, both gates passing |
