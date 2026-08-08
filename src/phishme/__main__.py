@@ -25,6 +25,11 @@ from phishme.features import FEATURE_VERSION
 from phishme.train import TrainConfig, fit_incremental, predict_scores
 
 try:
+    import joblib
+except ImportError:  # pragma: no cover
+    joblib = None
+
+try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
     tomllib = None
@@ -89,6 +94,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help="fail if a compatible smoke checkpoint already exists",
     )
     phresh_smoke.set_defaults(func=_cmd_phresh_smoke)
+
+    v3_train = subparsers.add_parser("v3-train", help="train PhishPedia V3 variants and validate")
+    v3_train.add_argument("--csv", required=True, type=Path, help="PhishPedia split CSV")
+    v3_train.add_argument("--phish-html", required=True, type=Path, help="phishing HTML root")
+    v3_train.add_argument("--benign-html", required=True, type=Path, help="benign HTML root")
+    v3_train.add_argument("--output", required=True, type=Path, help="directory for V3 artifacts")
+    v3_train.add_argument("--limit", default=None, type=int, help="optional row cap (smoke)")
+    v3_train.add_argument("--epochs", default=3, type=int, help="epochs for linear model")
+    v3_train.add_argument("--batch-size", default=2048, type=int, help="SGD mini-batch size")
+    v3_train.add_argument("--seed", default=42, type=int, help="training and split seed")
+    v3_train.set_defaults(func=_cmd_v3_train)
+
+    v3_eval = subparsers.add_parser("v3-eval", help="evaluate V3 variants on frozen PhreshPhish test")
+    v3_eval.add_argument("--output", required=True, type=Path, help="V3 run directory (from v3-train)")
+    v3_eval.add_argument("--phishlang-csv", required=True, type=Path, help="frozen PhishLang predictions CSV")
+    v3_eval.add_argument("--records", default=None, type=Path, help="frozen PhreshPhish test records JSONL (optional; streams if omitted)")
+    v3_eval.add_argument("--resamples", default=10000, type=int, help="paired bootstrap resamples")
+    v3_eval.add_argument("--limit", default=None, type=int, help="optional row cap for streaming (only when --records omitted)")
+    v3_eval.add_argument("--seed", default=42, type=int, help="bootstrap seed")
+    v3_eval.set_defaults(func=_cmd_v3_eval)
 
     return parser
 
@@ -388,6 +413,159 @@ def _phresh_smoke_train_records(phresh_module, *, limit: int, cutoff: str):
         limit=limit,
     )
     return phresh_module.filter_by_cutoff(base, cutoff, keep="before")
+
+
+def _cmd_v3_train(args: argparse.Namespace) -> None:
+    from phishme import cross_dataset, phishpedia
+
+    csv_path = _validate_csv_path(args.csv)
+    phish_html = _validate_dir_path("phish-html", args.phish_html)
+    benign_html = _validate_dir_path("benign-html", args.benign_html)
+    output_dir = _validate_phresh_output_dir(args.output)
+    epochs = _validate_integer("epochs", args.epochs, minimum=1)
+    batch_size = _validate_integer("batch-size", args.batch_size, minimum=1)
+    seed = _validate_integer("seed", args.seed, minimum=0)
+    limit = args.limit
+
+    frame = phishpedia.load_phishpedia(
+        csv_path, phish_html, benign_html, limit=limit,
+    )
+
+    # Split the frame
+    if "split" in frame.columns:
+        train_frame = frame[frame["split"] == "train"].reset_index(drop=True)
+        validation_frame = frame[frame["split"] == "validation"].reset_index(drop=True)
+        extra = set(frame["split"]) - {"train", "validation", "test"}
+        if extra:
+            raise ValueError(f"unknown split values: {sorted(extra)}")
+        split_source = "official_csv_split"
+    else:
+        splits = split_local(frame, seed=seed)
+        train_frame = splits["train"]
+        validation_frame = splits["validation"]
+        split_source = "split_local_domain_grouped"
+
+    result = cross_dataset.run_v3_train(
+        train_frame, validation_frame,
+        output_dir=output_dir, seed=seed,
+        epochs=epochs, batch_size=batch_size,
+    )
+
+    # Read back the validation report to include split_source
+    report_path = output_dir / "validation-report.json"
+    report = json.loads(report_path.read_text())
+    report["split_source"] = split_source
+    _write_json_atomically(report, report_path)
+
+    # Write run.json manifest
+    run_path = output_dir / "run.json"
+    artifacts = {
+        "validation-report.json": _file_manifest(report_path),
+        "models/linear.joblib": _file_manifest(output_dir / "models" / "linear.joblib"),
+        "models/tree.joblib": _file_manifest(output_dir / "models" / "tree.joblib"),
+        "models/hybrid.joblib": _file_manifest(output_dir / "models" / "hybrid.joblib"),
+        "model-linear.json": _file_manifest(output_dir / "model-linear.json"),
+    }
+    manifest = {
+        "schema": "phishme-v3-train-run-v1",
+        "command": "v3-train",
+        "normalized_arguments": {
+            "command": "v3-train",
+            "csv": str(csv_path),
+            "phish_html": str(phish_html),
+            "benign_html": str(benign_html),
+            "output": str(output_dir),
+            "limit": limit,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "seed": seed,
+        },
+        "split_source": split_source,
+        "feature_version": FEATURE_VERSION,
+        "seed": seed,
+        "git_commit": _git_commit(),
+        "versions": _runtime_versions(),
+        "artifacts": artifacts,
+    }
+    _write_json_atomically(manifest, run_path)
+
+    _print_json({
+        "schema": "phishme-v3-train-summary-v1",
+        "output": str(output_dir),
+        "split_source": split_source,
+        "variants": list(result["variants"]),
+        "artifacts": {
+            **artifacts,
+            "run.json": _file_manifest(run_path),
+        },
+    })
+
+
+def _cmd_v3_eval(args: argparse.Namespace) -> None:
+    from phishme import cross_dataset, phresh
+
+    output_dir = _validate_phresh_output_dir(args.output)
+    phishlang_csv = _validate_csv_path(args.phishlang_csv)
+    resamples = _validate_integer("resamples", args.resamples, minimum=1)
+    seed = _validate_integer("seed", args.seed, minimum=0)
+    records_path = args.records
+    limit = args.limit
+
+    # Read validation-report.json
+    val_report_path = output_dir / "validation-report.json"
+    if not val_report_path.exists():
+        raise ValueError(f"validation-report.json not found in {output_dir}")
+    val_report = json.loads(val_report_path.read_text())
+
+    # Reconstruct variant_models from disk
+    variant_models = {"variants": {}}
+    validation_metrics = {}
+    for kind in cross_dataset.VARIANT_KINDS:
+        variant = val_report["variants"][kind]
+        model_path = output_dir / "models" / f"{kind}.joblib"
+        if not model_path.exists():
+            raise ValueError(f"model not found: {model_path}")
+        model = joblib.load(model_path)
+        variant_models["variants"][kind] = {
+            "model": model,
+            "threshold": variant["threshold"],
+        }
+        validation_metrics[kind] = variant["validation_metrics"]
+
+    # Materialize records if --records not given
+    if records_path is None:
+        raw_stream = phresh._load_dataset(
+            phresh.PHRESH_DATASET, split="test",
+            revision=phresh.PHRESH_REVISION, streaming=True,
+        )
+        materialized_path = output_dir / "phresh-test-records.jsonl"
+        materialize_result = cross_dataset.materialize_phresh_test(
+            iter(raw_stream), materialized_path, limit=limit,
+        )
+        records_path = materialized_path
+        if materialize_result["accepted"] == 0:
+            raise ValueError("no accepted PhreshPhish test records")
+    else:
+        records_path = _validate_csv_path(args.records)
+
+    result = cross_dataset.run_v3_eval(
+        variant_models, validation_metrics,
+        records_path, phishlang_csv,
+        output_dir=output_dir, seed=seed, resamples=resamples,
+    )
+
+    _print_json({
+        "schema": "phishme-v3-eval-summary-v1",
+        "output": str(output_dir),
+        "variants": list(result["variants"]),
+    })
+
+
+def _validate_dir_path(name: str, path: Path) -> Path:
+    resolved = path.expanduser().resolve(strict=False)
+    if not resolved.is_dir():
+        raise ValueError(f"--{name} must be an existing directory: {resolved}")
+    return resolved
 
 
 def _train_validation_candidates(

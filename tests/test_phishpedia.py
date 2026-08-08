@@ -60,6 +60,30 @@ def test_load_phishpedia_rejects_unknown_label(phishpedia_tree):
         load_phishpedia(csv_path, phish_root, benign_root)
 
 
+def test_load_phishpedia_carries_split_column(tmp_path: Path):
+    """When the CSV has a split column, it is carried through to the frame."""
+    phish_root = tmp_path / "phish_html"
+    phish_root.mkdir()
+    benign_root = tmp_path / "benign_html"
+    benign_root.mkdir()
+    (phish_root / "p1.html").write_text(
+        "<html><title>verify password</title>"
+        "<form action='https://evil.example/x'></form></html>"
+    )
+    (benign_root / "b1.html").write_text(
+        "<html><title>welcome</title><a href='/home'>home</a></html>"
+    )
+    rows = [
+        {"file_name": "p1", "label": 1, "url": "https://evil.example/login", "type": "phishing", "split": "train"},
+        {"file_name": "b1", "label": 0, "url": "https://good.example/", "type": "benign", "split": "validation"},
+    ]
+    csv_path = tmp_path / SPLIT_CSV
+    pd.DataFrame(rows).to_csv(csv_path, index=False)
+    frame = load_phishpedia(csv_path, phish_root, benign_root)
+    assert "split" in frame.columns
+    assert list(frame["split"]) == ["train", "validation"]
+
+
 def test_load_phishpedia_rejects_missing_html_file(phishpedia_tree):
     csv_path, phish_root, benign_root = phishpedia_tree
     original = pd.read_csv(csv_path)

@@ -54,6 +54,8 @@ def load_phishpedia(
             "group": registrable_domain(row["url"]),
         }
         canonical.update({f"dom_{name}": float(dom_values[name]) for name in NUMERIC_FEATURES})
+        if "split" in frame.columns:
+            canonical["split"] = row["split"]
         rows.append(canonical)
 
     out = pd.DataFrame(rows)
