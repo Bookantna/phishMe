@@ -1,16 +1,19 @@
 import json
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
 
 from phishme.cross_dataset import (
+    CROSS_SCHEMA,
     VALIDATION_SCHEMA,
     VARIANT_KINDS,
     align_phishlang_scores,
     compute_delta,
     materialize_phresh_test,
+    run_v3_eval,
     run_v3_train,
 )
 from phishme.data import _sample_id, registrable_domain
@@ -103,6 +106,10 @@ def test_materialize_phresh_test_writes_jsonl(tmp_path: Path):
         assert "url" in rec
         assert "html" in rec
         assert "sample_id" in rec
+        assert rec["label"] in (0, 1)
+    # canonical labels: phish -> 1, benign -> 0
+    labels = [json.loads(line)["label"] for line in lines]
+    assert labels == [1, 0, 1]
 
 
 def test_materialize_phresh_test_limit(tmp_path: Path):
@@ -125,3 +132,132 @@ def test_materialize_phresh_test_rejects_existing_path(tmp_path: Path):
     output_path.write_text("existing")
     with pytest.raises(ValueError, match="exists"):
         materialize_phresh_test(iter(raw_rows), output_path)
+
+
+def test_run_v3_eval_per_variant_paired_bootstrap(tmp_path: Path):
+    """Regression test: per-variant paired bootstrap must use each variant's own scores.
+
+    Before the C1 fix, all three variants reused the linear variant's scores for
+    the paired bootstrap — so the paired dicts were identical.  After the fix,
+    each variant aligns its own scores against PhishLang.  We use XOR-pattern
+    features so that linear and tree models produce different predictions,
+    guaranteeing at least one paired-bootstrap dict differs.
+    """
+    pytest.importorskip("lightgbm")
+
+    rng = np.random.RandomState(42)
+    n = 60
+    rows = []
+    # Pre-generate XOR feature values so we can reuse them consistently
+    f0_vals = rng.uniform(0, 1, n)
+    f1_vals = rng.uniform(0, 1, n)
+    for i in range(n):
+        # XOR: label = 1 if (f0 > 0.5) XOR (f1 > 0.5)
+        label = 1 if (f0_vals[i] > 0.5) != (f1_vals[i] > 0.5) else 0
+        rows.append({
+            "url": f"http{'s' if label else ''}://d{i % 10}.example/p{i}",
+            "title": "verify password" if label else "welcome",
+            "label": label,
+            "_f0": f0_vals[i],
+            "_f1": f1_vals[i],
+        })
+    frame = pd.DataFrame(rows)
+    frame["sample_id"] = frame["url"].map(_sample_id)
+    frame["group"] = frame["url"].map(registrable_domain)
+    # Put XOR signal into the first two dom_* columns; zero out the rest
+    feature_names = list(NUMERIC_FEATURES)
+    for j, name in enumerate(feature_names):
+        if j == 0:
+            frame[f"dom_{name}"] = frame["_f0"]
+        elif j == 1:
+            frame[f"dom_{name}"] = frame["_f1"]
+        else:
+            frame[f"dom_{name}"] = 0.0
+    frame.drop(columns=["_f0", "_f1"], inplace=True)
+
+    train_frame = frame.iloc[:40].reset_index(drop=True)
+    val_frame = frame.iloc[40:50].reset_index(drop=True)
+    test_frame = frame.iloc[50:].reset_index(drop=True)
+
+    # -- train -----------------------------------------------------------
+    train_dir = tmp_path / "train"
+    train_summary = run_v3_train(
+        train_frame, val_frame,
+        output_dir=train_dir, seed=42, epochs=1,
+    )
+
+    # -- frozen JSONL ----------------------------------------------------
+    frozen_path = tmp_path / "frozen.jsonl"
+    records = []
+    for _, row in test_frame.iterrows():
+        rec = {
+            "url": row["url"],
+            "title": row["title"],
+            "date": "2023-01-01",
+            "label": int(row["label"]),
+            "sample_id": row["sample_id"],
+            "html": "<p>x</p>",
+            "_parse_status": "ok",
+        }
+        for name in NUMERIC_FEATURES:
+            rec[f"dom_{name}"] = float(row[f"dom_{name}"])
+        records.append(rec)
+    frozen_path.write_text(
+        "\n".join(json.dumps(r, separators=(",", ":"), sort_keys=True) for r in records) + "\n",
+        encoding="utf-8",
+    )
+
+    # -- fake PhishLang CSV ----------------------------------------------
+    phishlang_csv = tmp_path / "phishlang.csv"
+    pl_rows = []
+    for _, row in test_frame.iterrows():
+        pl_rows.append({
+            "sample_id": row["sample_id"],
+            "label": int(row["label"]),
+            "score": round(rng.uniform(0.3, 0.7), 6),
+            "model": "phishlang",
+            "source_commit": "abc123",
+        })
+    pd.DataFrame(pl_rows).to_csv(phishlang_csv, index=False)
+
+    # -- build variant_models + validation_metrics -----------------------
+    variant_models: dict = {"variants": {}}
+    for kind in VARIANT_KINDS:
+        model = joblib.load(train_dir / "models" / f"{kind}.joblib")
+        variant_models["variants"][kind] = {
+            "model": model,
+            "threshold": train_summary["variants"][kind]["threshold"],
+        }
+    validation_metrics = {
+        kind: train_summary["variants"][kind]["validation_metrics"]
+        for kind in VARIANT_KINDS
+    }
+
+    # -- eval ------------------------------------------------------------
+    eval_dir = tmp_path / "eval"
+    report = run_v3_eval(
+        variant_models, validation_metrics,
+        frozen_path, phishlang_csv,
+        output_dir=eval_dir, seed=42, resamples=50,
+    )
+
+    # -- assertions ------------------------------------------------------
+    report_path = eval_dir / "cross-dataset-report.json"
+    assert report_path.exists()
+    on_disk = json.loads(report_path.read_text(encoding="utf-8"))
+    assert on_disk["schema"] == CROSS_SCHEMA
+
+    for kind in VARIANT_KINDS:
+        v = report["variants"][kind]
+        assert "phresh_metrics" in v
+        assert "delta" in v
+        assert "base_rates" in v
+        pb = report["phishlang"]["paired_bootstrap"].get(kind)
+        assert pb is not None, f"missing paired_bootstrap for {kind}"
+
+    # Regression: the three paired-bootstrap dicts are NOT all identical
+    pbs = [report["phishlang"]["paired_bootstrap"][k] for k in VARIANT_KINDS]
+    assert not (pbs[0] == pbs[1] == pbs[2]), (
+        "paired bootstrap dicts are all identical — "
+        "per-variant alignment is broken"
+    )

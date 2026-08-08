@@ -182,7 +182,7 @@ def materialize_phresh_test(
     rejected = 0
 
     def _rows():
-        nonlocal processed, accepted, rejected
+        nonlocal processed
         yield first
         for row in iterator:
             if limit is not None and processed >= limit:
@@ -295,34 +295,37 @@ def run_v3_eval(
             "base_rates": base_rates,
         }
 
-    # PhishLang alignment
+    # PhishLang alignment — per-variant scores reordered to CSV order
     phishlang_frame = pd.read_csv(Path(phishlang_csv))
-    phresh_labels = np.array(labels, dtype=np.int8)
-    phresh_scores = None  # will be populated from the first variant for alignment
-    for kind in VARIANT_KINDS:
-        if phresh_scores is None:
-            model = variant_models["variants"][kind]["model"]
-            if kind == "linear":
-                phresh_scores = train.predict_scores(model, frame, include_dom=include_dom)
-            elif kind == "tree":
-                phresh_scores = models.predict_tree_scores(model, frame, include_dom=include_dom)
-            else:
-                phresh_scores = models.predict_hybrid_scores(model, frame, include_dom=include_dom)
-            break
-
-    aligned = align_phishlang_scores(phishlang_frame, sample_ids, phresh_scores, phresh_labels)
-    phishlang_metrics = evaluate.metrics_report(
-        aligned["labels"], aligned["right"], aligned["phishlang_threshold"]
-    )
+    phresh_labels_arr = np.array(labels, dtype=np.int8)
 
     paired = {}
+    phishlang_metrics = None
     for kind in VARIANT_KINDS:
+        model = variant_models["variants"][kind]["model"]
         threshold = variant_models["variants"][kind]["threshold"]
+
+        if kind == "linear":
+            variant_scores = train.predict_scores(model, frame, include_dom=include_dom)
+        elif kind == "tree":
+            variant_scores = models.predict_tree_scores(model, frame, include_dom=include_dom)
+        else:
+            variant_scores = models.predict_hybrid_scores(model, frame, include_dom=include_dom)
+
+        aligned_for_variant = align_phishlang_scores(
+            phishlang_frame, sample_ids, variant_scores, phresh_labels_arr,
+        )
         paired[kind] = evaluate.paired_bootstrap(
-            aligned["labels"], aligned["left"], aligned["right"],
-            threshold, aligned["phishlang_threshold"],
+            aligned_for_variant["labels"], aligned_for_variant["left"],
+            aligned_for_variant["right"],
+            threshold, aligned_for_variant["phishlang_threshold"],
             seed, resamples,
         )
+        if phishlang_metrics is None:
+            phishlang_metrics = evaluate.metrics_report(
+                aligned_for_variant["labels"], aligned_for_variant["right"],
+                aligned_for_variant["phishlang_threshold"],
+            )
 
     report = {
         "schema": CROSS_SCHEMA,
