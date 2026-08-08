@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 import pytest
-from phishme.models import TreeConfig, fit_tree, predict_tree_scores
+from phishme.models import HybridConfig, TreeConfig, fit_hybrid, fit_tree, predict_hybrid_scores, predict_tree_scores
+from phishme.train import TrainConfig
 
 
 def _synthetic_frame(n=120):
@@ -39,3 +40,46 @@ def test_tree_config_validates():
         TreeConfig(n_estimators=0)
     with pytest.raises(ValueError):
         TreeConfig(learning_rate=0.0)
+
+
+def test_hybrid_config_validates():
+    with pytest.raises(ValueError):
+        HybridConfig(meta_c=0)
+    with pytest.raises(ValueError):
+        HybridConfig(meta_c=-1)
+    with pytest.raises(ValueError):
+        HybridConfig(oof_folds=0)
+    with pytest.raises(TypeError):
+        HybridConfig(seed=42.1)
+
+
+def test_fit_hybrid_predicts_probabilities():
+    pytest.importorskip("lightgbm")
+    frame = _synthetic_frame(n=90)
+    hybrid = fit_hybrid(
+        frame,
+        HybridConfig(seed=0),
+        include_dom=False,
+        linear_config=TrainConfig(epochs=1, seed=0),
+        tree_config=TreeConfig(n_estimators=10, seed=0),
+    )
+    scores = predict_hybrid_scores(hybrid, frame, include_dom=False)
+    assert scores.shape == (len(frame),)
+    assert np.isfinite(scores).all()
+    assert ((scores >= 0) & (scores <= 1)).all()
+
+
+def test_fit_hybrid_meta_is_logistic():
+    pytest.importorskip("lightgbm")
+    frame = _synthetic_frame(n=90)
+    hybrid = fit_hybrid(
+        frame,
+        HybridConfig(seed=0),
+        include_dom=False,
+        linear_config=TrainConfig(epochs=1, seed=0),
+        tree_config=TreeConfig(n_estimators=10, seed=0),
+    )
+    from sklearn.linear_model import LogisticRegression
+
+    assert isinstance(hybrid["meta"], LogisticRegression)
+    assert "linear" in hybrid and "tree" in hybrid
