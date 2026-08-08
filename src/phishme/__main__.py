@@ -97,7 +97,7 @@ def _build_parser() -> argparse.ArgumentParser:
     v3_train.add_argument("--benign-html", required=True, type=Path, help="benign HTML root")
     v3_train.add_argument("--output", required=True, type=Path, help="directory for V3 artifacts")
     v3_train.add_argument("--limit", default=None, type=int, help="optional row cap (smoke)")
-    v3_train.add_argument("--epochs", default=3, type=int, help="epochs for linear model")
+    v3_train.add_argument("--epochs", default=3, type=int, help="epochs for linear model and hybrid linear sub-config")
     v3_train.add_argument("--batch-size", default=2048, type=int, help="SGD mini-batch size")
     v3_train.add_argument("--seed", default=42, type=int, help="training and split seed")
     v3_train.set_defaults(func=_cmd_v3_train)

@@ -50,7 +50,7 @@ Drive) and a networked runtime for PhreshPhish streaming:
   **Flags:**
   - `--output DIR` (required) — V3 run directory (from `v3-train`)
   - `--phishlang-csv PATH` (required) — frozen PhishLang predictions CSV
-  - `--records PATH` (required) — frozen PhreshPhish test records JSONL
+  - `--records PATH` (optional) — frozen PhreshPhish test records JSONL; when omitted, streams and materializes the pinned PhreshPhish test split first (requires network)
   - `--resamples N` — paired bootstrap resamples (default: 10000)
   - `--seed N` — bootstrap seed (default: 42)
 
