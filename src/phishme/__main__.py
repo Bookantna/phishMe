@@ -563,7 +563,7 @@ def _cmd_v3_eval(args: argparse.Namespace) -> None:
 
 
 def _cmd_v3_browser(args: argparse.Namespace) -> None:
-    model_path = _validate_csv_path(args.model)  # reuse file validation
+    model_path = _validate_file_path(args.model, "--model")
     output_dir = args.output.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -785,24 +785,22 @@ def _read_raw_csv(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, dtype={"label": "string"})
 
 
-def _validate_csv_path(path: Path) -> Path:
+def _validate_file_path(path: Path, flag: str) -> Path:
     try:
         resolved = path.expanduser().resolve(strict=True)
     except FileNotFoundError as exc:
-        raise ValueError(f"--csv does not exist: {path}") from exc
+        raise ValueError(f"{flag} does not exist: {path}") from exc
     if not resolved.is_file():
-        raise ValueError(f"--csv must be a file: {resolved}")
+        raise ValueError(f"{flag} must be a file: {resolved}")
     return resolved
+
+
+def _validate_csv_path(path: Path) -> Path:
+    return _validate_file_path(path, "--csv")
 
 
 def _validate_records_path(path: Path) -> Path:
-    try:
-        resolved = path.expanduser().resolve(strict=True)
-    except FileNotFoundError as exc:
-        raise ValueError(f"--records does not exist: {path}") from exc
-    if not resolved.is_file():
-        raise ValueError(f"--records must be a file: {resolved}")
-    return resolved
+    return _validate_file_path(path, "--records")
 
 
 def _validate_output_dir(path: Path) -> Path:
