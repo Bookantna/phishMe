@@ -111,6 +111,11 @@ def _build_parser() -> argparse.ArgumentParser:
     v3_eval.add_argument("--seed", default=42, type=int, help="bootstrap seed")
     v3_eval.set_defaults(func=_cmd_v3_eval)
 
+    v3_browser = subparsers.add_parser("v3-browser", help="measure browser deployment metrics for a model artifact")
+    v3_browser.add_argument("--model", required=True, type=Path, help="exported model.json")
+    v3_browser.add_argument("--output", required=True, type=Path, help="directory for browser-metrics.json")
+    v3_browser.set_defaults(func=_cmd_v3_browser)
+
     return parser
 
 
@@ -554,6 +559,47 @@ def _cmd_v3_eval(args: argparse.Namespace) -> None:
         "schema": "phishme-v3-eval-summary-v1",
         "output": str(output_dir),
         "variants": list(result["variants"]),
+    })
+
+
+def _cmd_v3_browser(args: argparse.Namespace) -> None:
+    model_path = _validate_csv_path(args.model)  # reuse file validation
+    output_dir = args.output.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Lazy import to avoid requiring Chrome at import time
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "measure_browser",
+            Path(__file__).resolve().parents[2] / "scripts" / "measure_browser.py",
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError("cannot load scripts.measure_browser")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise RuntimeError(
+            f"failed to import scripts.measure_browser: {exc}"
+        ) from exc
+
+    chrome_bin = module.find_chrome()
+    result = module.run(chrome_bin, model_path, str(output_dir))
+
+    _write_json_atomically(result, output_dir / "browser-metrics.json")
+
+    _print_json({
+        "schema": "phishme-browser-metrics-summary-v1",
+        "output": str(output_dir),
+        "model_bytes": result["model_bytes"],
+        "extension_bytes": result["extension_bytes"],
+        "avg_latency_ms": result["avg_latency_ms"],
+        "p95_latency_ms": result["p95_latency_ms"],
+        "memory_bytes": result["memory_bytes"],
+        "pages": result["pages"],
+        "chrome": result["chrome"],
+        "gates": result["gates"],
     })
 
 

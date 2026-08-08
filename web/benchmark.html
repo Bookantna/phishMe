@@ -103,11 +103,15 @@
       <section class="panel" aria-live="polite">
         <p id="status" class="status">Select a model artifact to run the browser benchmark.</p>
         <pre id="output">{}</pre>
+        <pre id="benchmark-results" style="display:none"></pre>
       </section>
     </main>
 
     <script type="module">
-      import { scoreRecord } from "./scorer.js";
+      import { scoreRecord, FEATURE_VERSION } from "./scorer.js";
+
+      // Re-export for the hidden element emitter
+      const SCORER_VERSION = typeof FEATURE_VERSION === "string" ? FEATURE_VERSION : "phishme-features-v1";
 
       const WARMUP_COUNT = 20;
       const MEASURED_COUNT = 200;
@@ -204,17 +208,13 @@
       const status = document.querySelector("#status");
       const output = document.querySelector("#output");
 
-      input.addEventListener("change", async () => {
-        const file = input.files?.[0];
-        if (!file) return;
-
+      async function startBenchmark(modelText) {
         status.textContent = "Running benchmark.";
         output.textContent = "{}";
 
         try {
-          const text = await file.text();
-          const model = JSON.parse(text);
-          const payloadBytes = new TextEncoder().encode(text).byteLength;
+          const model = JSON.parse(modelText);
+          const payloadBytes = new TextEncoder().encode(modelText).byteLength;
 
           for (let index = 0; index < WARMUP_COUNT; index += 1) {
             scoreRecord(model, records[index % records.length]);
@@ -229,24 +229,75 @@
           }
           durations.sort((left, right) => left - right);
 
+          const p95Ms = percentile(durations, 0.95);
+          const p50Ms = percentile(durations, 0.5);
+          const maxMs = durations[durations.length - 1];
+          const avgMs = durations.reduce((sum, v) => sum + v, 0) / durations.length;
+
           const report = {
             userAgent: navigator.userAgent,
             payloadBytes,
             sampleCount: MEASURED_COUNT,
-            p50Ms: percentile(durations, 0.5),
-            p95Ms: percentile(durations, 0.95),
-            maxMs: durations[durations.length - 1],
+            p50Ms,
+            p95Ms,
+            maxMs,
             withinPayloadBudget: payloadBytes <= BYTE_BUDGET,
-            withinLatencyBudget: percentile(durations, 0.95) <= P95_BUDGET_MS,
+            withinLatencyBudget: p95Ms <= P95_BUDGET_MS,
+          };
+
+          const memoryBytes = typeof performance.memory !== "undefined"
+            ? performance.memory.usedJSHeapSize
+            : null;
+
+          const hiddenResults = {
+            model_bytes: payloadBytes,
+            latencies: durations,
+            avg_latency_ms: avgMs,
+            p95_latency_ms: p95Ms,
+            memory_bytes: memoryBytes,
+            pages: MEASURED_COUNT,
+            scorer_version: SCORER_VERSION,
           };
 
           status.textContent = "Benchmark complete.";
           output.textContent = JSON.stringify(report, null, 2);
+          document.querySelector("#benchmark-results").textContent = JSON.stringify(hiddenResults);
         } catch (error) {
           status.textContent = "Benchmark failed.";
           output.textContent = JSON.stringify({ error: String(error?.message ?? error) }, null, 2);
         }
+      }
+
+      // File input handler
+      input.addEventListener("change", async () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        const text = await file.text();
+        await startBenchmark(text);
       });
+
+      // URL-based model loading for headless automation
+      function autoLoadModel() {
+        const params = new URLSearchParams(window.location.search);
+        const modelPath = params.get("model");
+        if (!modelPath) return;
+        fetch(modelPath)
+          .then((res) => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.text();
+          })
+          .then((text) => startBenchmark(text))
+          .catch((err) => {
+            status.textContent = "Benchmark failed.";
+            output.textContent = JSON.stringify({ error: String(err?.message ?? err) }, null, 2);
+          });
+      }
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", autoLoadModel);
+      } else {
+        autoLoadModel();
+      }
 
       function percentile(values, ratio) {
         if (!values.length) return 0;

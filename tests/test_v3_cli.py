@@ -1,6 +1,7 @@
 # tests/test_v3_cli.py
-"""CLI tests for v3-train and v3-eval subcommands."""
+"""CLI tests for v3-train, v3-eval, and v3-browser subcommands."""
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -14,6 +15,15 @@ from phishme.phishpedia import SPLIT_CSV_NAME
 
 SPLIT_CSV = SPLIT_CSV_NAME
 LIGHTGBM = pytest.importorskip("lightgbm")
+
+
+def _load_measure_browser():
+    script = Path(__file__).resolve().parents[1] / "scripts" / "measure_browser.py"
+    spec = importlib.util.spec_from_file_location("measure_browser", script)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
 
 
 def _make_html(is_phish: bool, idx: int) -> str:
@@ -190,3 +200,29 @@ def test_v3_eval_with_records_path(tmp_path: Path, phishpedia_v3_site):
     assert x_report["schema"] == "phishme-v3-cross-dataset-v1"
     assert set(x_report["variants"]) == {"linear", "tree", "hybrid"}
     assert "phishlang" in x_report
+
+
+# ---------------------------------------------------------------------------
+# v3-browser CLI tests
+# ---------------------------------------------------------------------------
+
+
+def test_parse_benchmark_json():
+    """parse_benchmark_json extracts strict JSON from the benchmark-results pre element."""
+    module = _load_measure_browser()
+
+    html = (
+        '<html><body><pre id="benchmark-results">'
+        '{"avg_latency_ms":12.5,"p95_latency_ms":20.1,'
+        '"memory_bytes":1048576,"pages":50,"model_bytes":5913068,'
+        '"latencies":[1.2,3.4],"scorer_version":"phishme-features-v1"}'
+        "</pre></body></html>"
+    )
+    result = module.parse_benchmark_json(html)
+    assert result["avg_latency_ms"] == 12.5
+    assert result["p95_latency_ms"] == 20.1
+    assert result["memory_bytes"] == 1048576
+    assert result["pages"] == 50
+    assert result["model_bytes"] == 5913068
+    assert result["scorer_version"] == "phishme-features-v1"
+    assert result["latencies"] == [1.2, 3.4]

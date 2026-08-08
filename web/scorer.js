@@ -735,3 +735,5 @@ function isIpv6Address(host) {
 function areIpv6Groups(groups) {
   return groups.every((group) => IPV6_GROUP_RE.test(group));
 }
+
+export { FEATURE_VERSION };
