@@ -14,6 +14,7 @@ from importlib import metadata
 from numbers import Integral, Real
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -23,11 +24,6 @@ from phishme.evaluate import metrics_report, select_threshold
 from phishme.export import export_model
 from phishme.features import FEATURE_VERSION
 from phishme.train import TrainConfig, fit_incremental, predict_scores
-
-try:
-    import joblib
-except ImportError:  # pragma: no cover
-    joblib = None
 
 try:
     import tomllib
@@ -546,7 +542,7 @@ def _cmd_v3_eval(args: argparse.Namespace) -> None:
         if materialize_result["accepted"] == 0:
             raise ValueError("no accepted PhreshPhish test records")
     else:
-        records_path = _validate_csv_path(args.records)
+        records_path = _validate_records_path(args.records)
 
     result = cross_dataset.run_v3_eval(
         variant_models, validation_metrics,
@@ -750,6 +746,16 @@ def _validate_csv_path(path: Path) -> Path:
         raise ValueError(f"--csv does not exist: {path}") from exc
     if not resolved.is_file():
         raise ValueError(f"--csv must be a file: {resolved}")
+    return resolved
+
+
+def _validate_records_path(path: Path) -> Path:
+    try:
+        resolved = path.expanduser().resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError(f"--records does not exist: {path}") from exc
+    if not resolved.is_file():
+        raise ValueError(f"--records must be a file: {resolved}")
     return resolved
 
 
