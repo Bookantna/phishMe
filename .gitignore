@@ -31,3 +31,6 @@ __pycache__/
 artifacts/
 reports/
 runs/
+
+# Hermes agent scratch
+.hermes/
