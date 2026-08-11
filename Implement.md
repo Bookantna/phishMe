@@ -350,22 +350,44 @@ fcdf624 fix: v3-eval records validation and joblib import
 b015572 fix: unify file path validation for v3 commands
 ```
 
-### Task 0: PhishPedia Data Acquisition (pending manual download)
+### Task 0: PhishPedia Data Acquisition (complete)
 
-Not yet performed in this sandbox. Requirements:
-
-- Download PhishPedia 30k benchmark from:
-  `https://drive.google.com/file/d/12ypEMPRQ43zGRqHGut0Esq2z5en0DH4g/view`
-- License: CC0-1.0.
-- Expected archive layout (from the official repository):
-  - Split CSV: `train_test_val_split_30.csv` with header
-    `file_name,label,url,type,split` (verify and record exact header;
-    adapter's schema check fails hard on drift).
-  - Phishing HTML directory (files named `<file_name>.html`).
-  - Benign HTML directory (files named `<file_name>.html`).
-- Row counts per split, label vocabulary, dataset SHA-256 to be recorded after
-  download.
-- Keep unpacked data under `dataset/` (git-ignored).
+- Official phishing archive: `phish_sample_30k.zip`, 19,301,131,139 bytes,
+  SHA-256 `3ea1865f31934aa667cb7940f37fea73b32c8fe79da556c879ee5cae08d8468b`.
+- Official benign archive: `benign_sample_30k.zip`, 21,674,266,313 bytes,
+  SHA-256 `bc7f6c950829ac34dfddd7bcf320bea9fe9a4222c9c063e49aef379c08179752`.
+- Observed phishing layout: 29,496 top-level site directories; 29,496
+  `info.txt`, 29,048 `html.txt`, and 29,496 `shot.png` files. Metadata parses as
+  a Python-literal dictionary containing URL, brand, `family_id`, and collection
+  fields. The archive contains no CSV and no benign rows.
+- Observed benign layout: 30,649 top-level site directories; 26,401 `info.txt`,
+  22,252 `html.txt`, 30,649 `shot.png`, and 10,273 `shot1.png` files. `info.txt`
+  contains the URL. The archive contains no split CSV.
+- The production adapter now reads metadata and HTML directly from both ZIPs,
+  avoids extracting roughly 42 GiB, removes canonical URL duplicates, and makes
+  split groups transitively disjoint over registrable domain and phishing
+  `family_id`.
+- Real archive smoke (`--limit 200 --epochs 1`) completed and wrote all linear,
+  tree, hybrid, browser-model, validation-report, and run-manifest artifacts.
+  After the duplicate-aware limit fix, the real loader returns exactly 100
+  unique phishing and 100 unique benign records for `--limit 200`.
+- Independent review then found that 783 real phishing rows have
+  `family_id=None`; the adapter now treats null/common sentinel values as
+  missing instead of merging them into a false mega-family. The hardened loader
+  also records per-archive audit counts, bounds streamed metadata/HTML member
+  sizes, skips malformed per-sample metadata/URLs, and fails closed on invalid
+  ZIPs, duplicate members, and cross-label URL conflicts.
+- The report declares one primary variant strictly from validation metrics
+  before holdout inspection. Empty legacy holdouts are skipped safely, and
+  archive smoke limits below 30 are rejected with a clear error.
+- Corrected full run: `D:/phishme-dataset/artifacts/phishpedia-full-v3-reviewed`.
+  It accepted 24,535 unique phishing and 22,251 benign rows (46,786 total),
+  recorded zero cross-label conflicts, and produced 28,073 train, 9,357
+  validation, and 9,356 holdout rows with zero sample/group overlap. Validation
+  selected the hybrid primary variant. Its untouched holdout confusion matrix
+  was `[[4442, 8], [3, 4903]]` with F1 `0.9988794947539982`.
+- Reviewed model artifacts were loaded back from disk and all three variants
+  produced 30 finite probabilities in `[0, 1]` on a fresh real-archive sample.
 
 ### V3 Verification Commands (Task 8)
 

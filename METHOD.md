@@ -21,14 +21,18 @@ unknown labels.
 
 ## Data Provenance and Licenses
 
-PhishPedia is the V3 training source, licensed CC0-1.0. The published benchmark
-is obtained from the official Google Drive link
-`https://drive.google.com/file/d/12ypEMPRQ43zGRqHGut0Esq2z5en0DH4g/view`
-(referenced from `github.com/lindsey98/Phishpedia`). It contains a split CSV
-(`train_test_val_split_30.csv`), a phishing HTML directory, and a benign HTML
-directory. The CSV columns include `file_name`, `url`, `label`, and optionally
-`type` and `split`. Labels are normalized from either the numeric `label` column
-or the `type` column. Unknown labels and missing HTML files are rejected.
+PhishPedia is the V3 training source, licensed CC0-1.0. The separate phishing
+and benign benchmark archives are obtained from the official project site at
+`https://sites.google.com/view/phishpedia-site/`. The site publishes
+separate archives for 29,496 phishing sites and 30,649 benign sites. Each sample
+is a top-level directory containing some combination of `info.txt`, `html.txt`,
+screenshots, and visual annotations. Phishing `info.txt` files are metadata
+dictionaries containing the URL and, when available, `family_id`, brand, and
+collection time; benign `info.txt` files contain the URL. There is no official
+split CSV in these archives. The adapter reads both ZIP files without extraction
+and rejects samples missing a usable URL or `html.txt`. Malformed metadata and
+URLs are counted and skipped; conflicting cross-label URLs, duplicate ZIP
+members, invalid ZIPs, and oversized metadata/HTML members fail closed.
 
 PhreshPhish is the V3 frozen cross-dataset test set, used via its Hugging Face
 dataset source, pinned to revision
@@ -42,13 +46,30 @@ metadata are never model features.
 
 ## Split Rules
 
-PhishPedia uses its published official train/validation/test split from
-`train_test_val_split_30.csv` as-is. The CSV is never re-split by the project.
-Registrable-domain grouping is used only for duplicate and overlap accounting,
-not for re-partitioning.
+PhishPedia has no published train/validation/test split. Canonical URL
+duplicates are removed first. Rows are connected into leakage-control groups
+whenever they share either a registrable domain or a phishing `family_id`;
+null and common sentinel family values are treated as missing. Transitive
+connections are preserved. A seeded five-fold stratified group
+split assigns three folds to training, one to validation, and one to an
+untouched local holdout. Threshold and hyperparameter selection use only the
+validation split. The local holdout is scored once after selection.
 
-PhreshPhish preserves the official test split as untouched test data. The
-official training split is ordered by collection date; its final temporal portion
+One primary variant is declared before holdout inspection by ranking variants
+on validation average precision, then validation F1, then lower validation
+Brier score, with a fixed variant-order final tie-breaker. Holdout metrics for
+all variants remain diagnostic and do not override that selection.
+
+The two labels still originate from separately published archives and may retain
+crawler-, timestamp-, completeness-, or source-specific artifacts. Group
+separation prevents direct domain/family duplication but cannot remove all
+source-corpus shortcuts. Accordingly, local validation and holdout metrics are
+within-corpus diagnostics, not estimates of deployment performance. The frozen
+PhreshPhish cross-dataset evaluation remains required before making comparative
+or real-world performance claims.
+
+PhreshPhish preserves the official test split as untouched test data.
+The official training split is ordered by collection date; its final temporal portion
 is reserved for validation, and earlier examples are used for training. Test
 examples are never moved into training or validation.
 

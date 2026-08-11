@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import zipfile
 from pathlib import Path
 
 import pandas as pd
@@ -42,6 +43,13 @@ def _make_html(is_phish: bool, idx: int) -> str:
             f"<body><p>Welcome to page {idx}</p>"
             f"{links}</body></html>"
         )
+
+
+def _write_archive(path: Path, rows: list[tuple[str, str, str]]) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        for member, metadata, html in rows:
+            archive.writestr(f"{member}/info.txt", metadata)
+            archive.writestr(f"{member}/html.txt", html)
 
 
 @pytest.fixture
@@ -123,6 +131,84 @@ def test_v3_train_writes_report(tmp_path: Path, phishpedia_v3_site):
     # Verify the split_source is recorded
     assert "split_source" in report
     assert report["split_source"] == "official_csv_split"
+
+
+def test_v3_train_accepts_official_paired_archives(tmp_path: Path):
+    phish_zip = tmp_path / "phish.zip"
+    benign_zip = tmp_path / "benign.zip"
+    _write_archive(
+        phish_zip,
+        [
+            (
+                f"phish-{index}",
+                repr(
+                    {
+                        "url": f"https://evil{index}.example/login",
+                        "family_id": f"kit-{index}",
+                    }
+                ),
+                _make_html(True, index),
+            )
+            for index in range(16)
+        ],
+    )
+    _write_archive(
+        benign_zip,
+        [
+            (
+                f"benign-{index}",
+                f"https://good{index}.example/",
+                _make_html(False, index),
+            )
+            for index in range(16)
+        ],
+    )
+    out_dir = tmp_path / "out"
+
+    exit_code = __main__.main(
+        [
+            "v3-train",
+            "--phish-zip", str(phish_zip),
+            "--benign-zip", str(benign_zip),
+            "--output", str(out_dir),
+            "--limit", "30",
+            "--epochs", "1",
+            "--seed", "42",
+        ]
+    )
+
+    assert exit_code == 0
+    report = json.loads((out_dir / "validation-report.json").read_text())
+    assert report["split_source"] == "domain_and_family_grouped_archives"
+    assert report["primary_variant"]["selection_source"] == "validation"
+    assert report["primary_variant"]["kind"] in report["variants"]
+    for variant in report["variants"].values():
+        assert "holdout_metrics" in variant
+    run = json.loads((out_dir / "run.json").read_text())
+    assert run["normalized_arguments"]["phish_zip"] == str(phish_zip.resolve())
+    assert run["normalized_arguments"]["benign_zip"] == str(benign_zip.resolve())
+    assert run["dataset"]["canonical_rows"] == 30
+    assert run["dataset"]["archive_audit"]["phishing"]["accepted"] == 15
+    assert run["dataset"]["archive_audit"]["benign"]["accepted"] == 15
+    assert run["dataset"]["label_counts"] == {"0": 15, "1": 15}
+    assert run["dataset"]["archives"]["phishing"]["sha256"]
+    assert run["dataset"]["archives"]["benign"]["sha256"]
+    assert run["dataset"]["split_report"]["disjointness"]["group_disjoint"] is True
+
+
+def test_v3_train_rejects_undersized_archive_limit(tmp_path: Path, capsys):
+    exit_code = __main__.main(
+        [
+            "v3-train",
+            "--phish-zip", str(tmp_path / "missing-phish.zip"),
+            "--benign-zip", str(tmp_path / "missing-benign.zip"),
+            "--output", str(tmp_path / "out"),
+            "--limit", "10",
+        ]
+    )
+
+    assert exit_code == 1
+    assert "--limit must be at least 30 in archive mode" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

@@ -44,6 +44,7 @@ def _fake_phishlang_repo(tmp_path: Path) -> tuple[Path, str, str]:
     _git("init", cwd=repo)
     _git("config", "user.email", "test@example.test", cwd=repo)
     _git("config", "user.name", "Test User", cwd=repo)
+    _git("config", "commit.gpgsign", "false", cwd=repo)
     _git("remote", "add", "origin", "https://github.com/UTA-SPRLab/phishlang.git", cwd=repo)
 
     source = repo / "src"

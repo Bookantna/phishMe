@@ -10,6 +10,70 @@ sparse, browser-computable classifier.
 - [Scientific method](METHOD.md)
 - [Implementation log](Implement.md)
 
+## Achievements
+
+### V3 PhishPedia training run (complete)
+
+Full V3 training executed on the official PhishPedia paired archives
+(46,786 canonical rows; 28,068 train / 9,356 validation / 9,362 test,
+group-disjoint by registrable domain and phishing `family_id`, seed 42).
+All three variants were fitted, thresholds were selected on validation only,
+and the holdout was scored exactly once. Artifacts (models, model-linear.json,
+validation-report.json, run.json) live in
+`D:\phishme-dataset\artifacts\phishpedia-full-v3` and are audited by manifest
+sha256 hashes.
+
+### Cross-dataset evaluation on the frozen PhreshPhish test split (smoke slice)
+
+The pinned PhreshPhish test split (Hugging Face revision
+`eabec4b7a66324b79cc8a0ad856d1731dc26fe1a`, verified reachable via the
+Hugging Face MCP) was streamed and frozen into a local JSONL. A 500-record
+smoke slice (275 benign / 225 phish, first rows in stream order) was scored
+with the trained variants using the project's own evaluation code. Full
+per-variant metrics are saved in
+`D:\phishme-dataset\artifacts\phishpedia-full-v3\phresh-smoke-stats.json`
+(schema `phishme-v3-smoke-stats-v1`).
+
+| Variant | Val AP | Val F1 | Phresh AP | Phresh F1 | ΔAP | ΔF1 | Phresh prec | Phresh rec | Phresh FPR | AUC |
+|---------|--------|--------|-----------|-----------|-----|-----|-------------|------------|------------|-----|
+| linear  | 0.9999 | 0.9979 | 0.4398    | 0.5365    | 0.5601 | 0.4614 | 0.4341 | 0.7022 | 0.7491 | 0.4623 |
+| tree    | 1.0000 | 0.9994 | 0.3970    | 0.5373    | 0.6030 | 0.4621 | 0.4045 | 0.8000 | 0.9636 | 0.3933 |
+| hybrid  | 1.0000 | 0.9995 | 0.4024    | 0.5236    | 0.5976 | 0.4759 | 0.3981 | 0.7644 | 0.9455 | 0.4169 |
+
+**Key finding (negative result, honestly reported):** variants that are
+near-perfect on PhishPedia validation (AP ≥ 0.9999, F1 ≥ 0.9979) do **not**
+generalize to the PhreshPhish slice. Precision collapses to 0.40–0.43, FPR
+explodes to 75–96%, accuracy (0.37–0.45) falls below the always-benign
+baseline, and AUC 0.39–0.46 indicates the score ranking is mildly
+anti-correlated with labels. This is directional evidence — the slice is the
+first 500 test rows in stream order, so error bars are wide; the full 168,060
+record test set is required for the definitive generalization read.
+
+### PhishLang official baseline pipeline
+
+- Official PhishLang repository (UTA-SPRLab/phishlang, commit `6b72838`) cloned
+  with the 98 MB MobileBERT checkpoint; repo cleanliness and remote origin are
+  validated before every scoring run.
+- GPU scoring pipeline built on the project's `run_phishlang` entry point
+  (CUDA model placement + tokenizer wrapper for transformers 5.x
+  `BatchEncoding`), exercised end-to-end on records and verified for
+  correctness on sample rows.
+- **Latency finding:** the project's scorer runs one 128-token window per
+  forward pass (~100–120 ms/window on an RTX 4060 Ti). PhreshPhish pages are
+  large (measured window distribution over the 500-record slice: median 154,
+  mean 706, p90 1,439, max 21,651 windows per page; 352,921 windows total), so
+  batch-1 scoring costs hours. The PhishLang paper's 0.39 s median is not
+  comparable: it is a median over their smaller PhishPedia-derived pages on a
+  Xeon W + 4×A5000 rig. A batched-window rewrite of the scorer
+  (semantics-preserving max-over-windows aggregation, ~10–30× speedup) is the
+  next step before the full paired-bootstrap comparison can complete in
+  reasonable time.
+
+### Test suite
+
+All 146 pytest tests pass locally (1 skip, PHISHLANG_DIR-gated). Ruff lint is
+clean.
+
 ## V3: Cross-Dataset Generalization Study
 
 ### Research Question
@@ -20,25 +84,32 @@ official pretrained PhishLang MobileBERT reference?
 
 ### V3 Commands
 
-Test-verified V3 CLI; real dataset runs require PhishPedia download (Google
-Drive) and a networked runtime for PhreshPhish streaming:
+Test-verified V3 CLI. The official PhishPedia phishing and benign archives are
+read directly as ZIP files; extraction is neither required nor recommended:
 
-- `python -m phishme v3-train --csv PATH --phish-html PATH --benign-html PATH --output DIR`
+- `python -m phishme v3-train --phish-zip PATH --benign-zip PATH --output DIR`
 
-  Trains all three phishMe variants on the PhishPedia benchmark, selects
-  thresholds on PhishPedia validation, and exports model artifacts plus a
-  `validation-report.json`. Accepts optional `--limit`, `--epochs`,
-  `--batch-size`, and `--seed`.
+  Loads URL metadata and `html.txt` directly from both archives, rejects rows
+  missing either field, removes canonical-URL duplicates, and constructs
+  connected split groups over registrable domains and phishing `family_id`
+  values. It trains all three variants, selects thresholds on validation data,
+  declares one primary variant using validation metrics only, scores the
+  untouched local holdout once, and exports model artifacts plus a
+  `validation-report.json`. `run.json` includes accepted, skipped, malformed,
+  missing-field, and duplicate counts for both archives.
 
   **Flags:**
-  - `--csv PATH` (required) — PhishPedia split CSV (`train_test_val_split_30.csv`)
-  - `--phish-html PATH` (required) — phishing HTML root directory
-  - `--benign-html PATH` (required) — benign HTML root directory
+  - `--phish-zip PATH` (required in archive mode) — official phishing archive
+  - `--benign-zip PATH` (required in archive mode) — official benign archive
   - `--output DIR` (required) — directory for V3 artifacts (models, reports)
-  - `--limit N` — optional row cap for smoke testing
+  - `--limit N` — optional approximately class-balanced row cap for smoke testing; minimum 30
   - `--epochs N` — epochs for linear model (default: 3)
   - `--batch-size N` — SGD mini-batch size (default: 2048)
   - `--seed N` — training and split seed (default: 42)
+
+  The former `--csv`, `--phish-html`, and `--benign-html` flags remain only for
+  synthetic fixtures and compatibility with earlier experiments; they do not
+  describe the official archive layout.
 
 - `python -m phishme v3-eval --output DIR --phishlang-csv PATH --records PATH`
 
@@ -68,12 +139,16 @@ Drive) and a networked runtime for PhreshPhish streaming:
 
 ### V3 Data Policy
 
-- **PhishPedia** (CC0-1.0): downloaded from the official Google Drive link
-  `https://drive.google.com/file/d/12ypEMPRQ43zGRqHGut0Esq2z5en0DH4g/view`
-  (referenced from `github.com/lindsey98/Phishpedia`). The archive contains
-  `train_test_val_split_30.csv`, a phishing HTML directory, and a benign HTML
-  directory. Kept under `dataset/` (git-ignored). No rows, HTML, or derivatives
-  are committed.
+- **PhishPedia**: the
+  [official project site](https://sites.google.com/view/phishpedia-site/)
+  publishes separate phishing and benign archives. Each site is a top-level
+  directory containing some combination of
+  `info.txt`, `html.txt`, screenshots, and annotations. The phishing archive's
+  `info.txt` is a metadata dictionary; the benign archive's `info.txt` is the
+  URL. There is no official train/validation/test CSV in these archives. Raw
+  archives and generated artifacts remain outside Git. Because the two labels
+  come from separate archives, local metrics are within-corpus diagnostics;
+  frozen PhreshPhish evaluation is required for cross-dataset claims.
 
 - **PhreshPhish** (CC BY 4.0): streamed from Hugging Face datasets at pinned
   revision `eabec4b7a66324b79cc8a0ad856d1731dc26fe1a`. Test split is frozen
@@ -89,14 +164,17 @@ Drive) and a networked runtime for PhreshPhish streaming:
 
 | Item | Status |
 |------|--------|
-| All 135 pytest tests + 1 skip | ✅ Passed locally (`env -u PHISHLANG_DIR`) |
+| All 146 pytest tests + 1 skip | ✅ Passed locally (`env -u PHISHLANG_DIR`) |
 | Ruff lint | ✅ Clean (`ruff check .` passes) |
 | Node parity (7 tests) | ✅ Passed |
 | CLI smoke with synthetic data | ✅ `v3-train`, `v3-eval`, `v3-browser` exercised |
 | Headless Chrome `v3-browser` smoke (tiny model) | ✅ avg 0.13 ms, p95 0.20 ms, ~19.3 MB, both gates passing |
-| PhishPedia archive download + layout verification | 🔲 Manual (Google Drive) |
-| Full PhreshPhish test streaming | 🔲 Needs networked runtime (HF access) |
-| Official PhishLang predictions run | 🔲 Needs `PHISHLANG_DIR` (clean checkout + 98 MB model) |
+| Paired PhishPedia archive download + layout verification | ✅ Verified locally; ZIP-native smoke passed |
+| Full reviewed PhishPedia V3 training | ✅ 46,786 rows; models and audited manifests written |
+| PhreshPhish test streaming + materialization | ✅ Verified on a 500-record smoke slice (pinned revision, via HF) |
+| PhreshPhish full test materialization (168,060 records) | 🔲 Pending (≈25–35 GB JSONL; scheduled as needed) |
+| Official PhishLang predictions (500-record slice) | 🔲 Batch-1 loop proven correct but ~100–120 ms/window; batched-window rewrite pending |
+| Full cross-dataset report (`cross-dataset-report.json`) | 🔲 Blocked on PhishLang predictions CSV |
 
 ### V3 Browser Smoke Results
 
@@ -132,6 +210,12 @@ python -m pytest tests/test_package.py -q
 For V3 with LightGBM:
 ```bash
 python -m pip install -e '.[tree,dev,cloud]'
+```
+
+For PhishLang GPU scoring (torch + transformers, CUDA build):
+```bash
+uv pip install --python .venv/Scripts/python.exe torch transformers bs4 \
+  --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ## Commands (V2 Baseline)

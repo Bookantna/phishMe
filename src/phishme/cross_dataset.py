@@ -23,6 +23,7 @@ def run_v3_train(
     train_frame,
     validation_frame,
     *,
+    test_frame=None,
     output_dir,
     seed,
     epochs=3,
@@ -110,6 +111,32 @@ def run_v3_train(
             "validation_metrics": metrics,
             "validation_base_rates": base_rates,
         }
+        if test_frame is not None and len(test_frame) > 0:
+            test_labels = test_frame["label"].to_numpy(dtype=np.int8)
+            if kind == "linear":
+                test_scores = train.predict_scores(model, test_frame, include_dom=include_dom)
+            elif kind == "tree":
+                test_scores = models.predict_tree_scores(model, test_frame, include_dom=include_dom)
+            else:
+                test_scores = models.predict_hybrid_scores(model, test_frame, include_dom=include_dom)
+            variants[kind]["holdout_metrics"] = evaluate.metrics_report(
+                test_labels, test_scores, threshold,
+            )
+
+    primary_kind = max(
+        VARIANT_KINDS,
+        key=lambda kind: (
+            variants[kind]["validation_metrics"]["average_precision"],
+            variants[kind]["validation_metrics"]["f1"],
+            -variants[kind]["validation_metrics"]["brier"],
+            -VARIANT_KINDS.index(kind),
+        ),
+    )
+    primary_variant = {
+        "kind": primary_kind,
+        "selection_source": "validation",
+        "ranking": ["average_precision_desc", "f1_desc", "brier_asc", "variant_order"],
+    }
 
     # -- persist models -------------------------------------------------
     linear_model_path = models_dir / "linear.joblib"
@@ -136,6 +163,7 @@ def run_v3_train(
     report = {
         "schema": VALIDATION_SCHEMA,
         "seed": int(seed),
+        "primary_variant": primary_variant,
         "variants": variants,
         "artifacts": manifest,
     }
@@ -143,6 +171,7 @@ def run_v3_train(
     phresh.write_json_atomically(report, report_path)
 
     return {
+        "primary_variant": primary_variant,
         "variants": variants,
         "output_dir": str(output_path),
     }
@@ -423,7 +452,7 @@ def _dump_joblib_atomically(model, path: Path) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
         joblib.dump(model, tmp)
-        fd = os.open(tmp, os.O_RDONLY)
+        fd = os.open(tmp, os.O_RDWR)
         try:
             os.fsync(fd)
         finally:

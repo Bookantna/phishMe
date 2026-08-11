@@ -67,10 +67,19 @@ def test_run_v3_train_writes_artifacts(tmp_path: Path):
     frame = _synthetic_phishpedia_frame()
     train_frame = frame.iloc[:50].reset_index(drop=True)
     val_frame = frame.iloc[50:].reset_index(drop=True)
-    summary = run_v3_train(train_frame, val_frame, output_dir=tmp_path, seed=42)
+    empty_test_frame = frame.iloc[:0].reset_index(drop=True)
+    summary = run_v3_train(
+        train_frame,
+        val_frame,
+        test_frame=empty_test_frame,
+        output_dir=tmp_path,
+        seed=42,
+    )
     assert set(summary["variants"]) == {"linear", "tree", "hybrid"}
     assert (tmp_path / "models").is_dir()
     assert (tmp_path / "validation-report.json").exists()
+    report = json.loads((tmp_path / "validation-report.json").read_text(encoding="utf-8"))
+    assert all("holdout_metrics" not in variant for variant in report["variants"].values())
 
 
 def test_run_v3_train_validation_report_schema(tmp_path: Path):

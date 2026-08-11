@@ -92,9 +92,11 @@ def _build_parser() -> argparse.ArgumentParser:
     phresh_smoke.set_defaults(func=_cmd_phresh_smoke)
 
     v3_train = subparsers.add_parser("v3-train", help="train PhishPedia V3 variants and validate")
-    v3_train.add_argument("--csv", required=True, type=Path, help="PhishPedia split CSV")
-    v3_train.add_argument("--phish-html", required=True, type=Path, help="phishing HTML root")
-    v3_train.add_argument("--benign-html", required=True, type=Path, help="benign HTML root")
+    v3_train.add_argument("--phish-zip", type=Path, help="official phishing ZIP archive")
+    v3_train.add_argument("--benign-zip", type=Path, help="official benign ZIP archive")
+    v3_train.add_argument("--csv", type=Path, help="legacy synthetic split CSV")
+    v3_train.add_argument("--phish-html", type=Path, help="legacy phishing HTML root")
+    v3_train.add_argument("--benign-html", type=Path, help="legacy benign HTML root")
     v3_train.add_argument("--output", required=True, type=Path, help="directory for V3 artifacts")
     v3_train.add_argument("--limit", default=None, type=int, help="optional row cap (smoke)")
     v3_train.add_argument("--epochs", default=3, type=int, help="epochs for linear model and hybrid linear sub-config")
@@ -419,35 +421,85 @@ def _phresh_smoke_train_records(phresh_module, *, limit: int, cutoff: str):
 def _cmd_v3_train(args: argparse.Namespace) -> None:
     from phishme import cross_dataset, phishpedia
 
-    csv_path = _validate_csv_path(args.csv)
-    phish_html = _validate_dir_path("phish-html", args.phish_html)
-    benign_html = _validate_dir_path("benign-html", args.benign_html)
     output_dir = _validate_phresh_output_dir(args.output)
     epochs = _validate_integer("epochs", args.epochs, minimum=1)
     batch_size = _validate_integer("batch-size", args.batch_size, minimum=1)
     seed = _validate_integer("seed", args.seed, minimum=0)
-    limit = args.limit
+    limit = None if args.limit is None else _validate_integer("limit", args.limit, minimum=2)
 
-    frame = phishpedia.load_phishpedia(
-        csv_path, phish_html, benign_html, limit=limit,
-    )
+    archive_mode = args.phish_zip is not None or args.benign_zip is not None
+    legacy_mode = any(value is not None for value in (args.csv, args.phish_html, args.benign_html))
+    if archive_mode and legacy_mode:
+        raise ValueError("use either --phish-zip/--benign-zip or the legacy CSV/HTML flags")
+    if archive_mode:
+        if args.phish_zip is None or args.benign_zip is None:
+            raise ValueError("archive mode requires both --phish-zip and --benign-zip")
+        if limit is not None and limit < 30:
+            raise ValueError("--limit must be at least 30 in archive mode")
+        phish_zip = _validate_file_path(args.phish_zip, "--phish-zip")
+        benign_zip = _validate_file_path(args.benign_zip, "--benign-zip")
+        frame = phishpedia.load_phishpedia_archives(phish_zip, benign_zip, limit=limit)
+        splits = split_local(frame, seed=seed)
+        train_frame = splits["train"]
+        validation_frame = splits["validation"]
+        test_frame = splits["test"]
+        split_source = "domain_and_family_grouped_archives"
+        split_report = _split_report(splits, seed)
+        data_arguments = {
+            "phish_zip": str(phish_zip),
+            "benign_zip": str(benign_zip),
+        }
+        dataset_manifest = {
+            "name": "official_phishpedia_paired_archives",
+            "canonical_rows": len(frame),
+            "label_counts": _label_counts(frame),
+            "archive_audit": frame.attrs["archive_audit"],
+            "archives": {
+                "phishing": {"path": str(phish_zip), **_file_manifest(phish_zip)},
+                "benign": {"path": str(benign_zip), **_file_manifest(benign_zip)},
+            },
+            "split_report": split_report,
+        }
+    elif legacy_mode:
+        if args.csv is None or args.phish_html is None or args.benign_html is None:
+            raise ValueError("legacy mode requires --csv, --phish-html, and --benign-html")
+        csv_path = _validate_csv_path(args.csv)
+        phish_html = _validate_dir_path("phish-html", args.phish_html)
+        benign_html = _validate_dir_path("benign-html", args.benign_html)
+        frame = phishpedia.load_phishpedia(csv_path, phish_html, benign_html, limit=limit)
+        data_arguments = {
+            "csv": str(csv_path),
+            "phish_html": str(phish_html),
+            "benign_html": str(benign_html),
+        }
+    else:
+        raise ValueError("v3-train requires paired ZIP archives or the legacy CSV/HTML inputs")
 
-    # Split the frame
-    if "split" in frame.columns:
+    if not archive_mode and "split" in frame.columns:
         train_frame = frame[frame["split"] == "train"].reset_index(drop=True)
         validation_frame = frame[frame["split"] == "validation"].reset_index(drop=True)
+        test_frame = frame[frame["split"] == "test"].reset_index(drop=True)
         extra = set(frame["split"]) - {"train", "validation", "test"}
         if extra:
             raise ValueError(f"unknown split values: {sorted(extra)}")
         split_source = "official_csv_split"
-    else:
+    elif not archive_mode:
         splits = split_local(frame, seed=seed)
         train_frame = splits["train"]
         validation_frame = splits["validation"]
+        test_frame = splits["test"]
         split_source = "split_local_domain_grouped"
+
+    if not archive_mode:
+        dataset_manifest = {
+            "name": "legacy_phishpedia_csv_layout",
+            "canonical_rows": len(frame),
+            "label_counts": _label_counts(frame),
+        }
 
     result = cross_dataset.run_v3_train(
         train_frame, validation_frame,
+        test_frame=test_frame,
         output_dir=output_dir, seed=seed,
         epochs=epochs, batch_size=batch_size,
     )
@@ -472,9 +524,7 @@ def _cmd_v3_train(args: argparse.Namespace) -> None:
         "command": "v3-train",
         "normalized_arguments": {
             "command": "v3-train",
-            "csv": str(csv_path),
-            "phish_html": str(phish_html),
-            "benign_html": str(benign_html),
+            **data_arguments,
             "output": str(output_dir),
             "limit": limit,
             "epochs": epochs,
@@ -482,6 +532,7 @@ def _cmd_v3_train(args: argparse.Namespace) -> None:
             "seed": seed,
         },
         "split_source": split_source,
+        "dataset": dataset_manifest,
         "feature_version": FEATURE_VERSION,
         "seed": seed,
         "git_commit": _git_commit(),
