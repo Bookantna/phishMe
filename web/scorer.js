@@ -736,4 +736,4 @@ function areIpv6Groups(groups) {
   return groups.every((group) => IPV6_GROUP_RE.test(group));
 }
 
-export { FEATURE_VERSION };
+export { FEATURE_VERSION, DOM_NUMERIC_FEATURES, NUMERIC_FEATURES };

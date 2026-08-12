@@ -1,0 +1,16 @@
+{
+  "name": "phishme-browser-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test web/parity.test.mjs extension/tests/unit/*.test.mjs",
+    "test:extension:unit": "node --test extension/tests/unit/*.test.mjs",
+    "test:extension:e2e": "node --test extension/tests/e2e/*.test.mjs",
+    "build:extension": "node extension/scripts/build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "puppeteer-core": "25.6.0"
+  }
+}

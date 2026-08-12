@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>phishMe page scan</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body data-state="unavailable">
+  <main>
+    <p id="eyebrow">phishMe local scan</p>
+    <h1 id="status-heading">Checking this page…</h1>
+    <p id="status-detail"></p>
+    <dl id="score-details" hidden>
+      <div><dt>Model score</dt><dd id="score-value"></dd></div>
+      <div><dt>Warning threshold</dt><dd id="threshold-value"></dd></div>
+    </dl>
+    <p id="disclaimer">Experimental research model — not a substitute for Chrome Safe Browsing.</p>
+    <button id="rescan" type="button" hidden>Scan again</button>
+    <p id="rescan-status" role="status" aria-live="polite"></p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

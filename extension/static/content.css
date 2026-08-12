@@ -1,0 +1,9 @@
+[data-phishme-warning-host] {
+  all: initial !important;
+  position: fixed !important;
+  inset: 0 0 auto 0 !important;
+  z-index: 2147483646 !important;
+  display: block !important;
+  pointer-events: none !important;
+}
+[data-phishme-warning-host] > * { pointer-events: auto !important; }

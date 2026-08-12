@@ -188,9 +188,41 @@ Headless Chrome `v3-browser` smoke on a tiny exported linear model:
 | Payload ≤ 25 MB gate | ✅ passing |
 | p95 ≤ 250 ms gate | ✅ passing |
 
-**Note:** These values were measured on a tiny smoke model, not a fully-trained
-PhishPedia model. Real trained-model latency is pending PhishPedia download and
-full training.
+**Note:** The table above is the original tiny-model smoke result. The reviewed,
+fully trained linear artifact was subsequently measured with the same harness on
+August 12, 2026: 5,730,989 model bytes, 5,772,390 harness payload bytes,
+~34.2 MB reported JavaScript heap, and both the 25 MB payload and 250 ms p95
+gates passed over 200 scores. The harness reported average and p95 as 0.0 ms,
+which should be interpreted as below its timer/reporting resolution rather than
+literal zero-cost inference. The durable report is stored outside Git at
+`D:\phishme-dataset\artifacts\phishpedia-full-v3-reviewed\extension-browser-check\browser-metrics.json`.
+
+## Chrome Extension (Experimental)
+
+phishMe now includes a Manifest V3 Chrome extension that runs the trained linear
+browser artifact completely locally. It automatically extracts the same
+allowlisted URL and DOM features used by `web/scorer.js`, updates a per-tab
+badge, shows a non-blocking warning for positive classifications, and provides
+an honest result popup. See [`extension/README.md`](extension/README.md) for the
+build, installation, permission, privacy, and testing instructions.
+
+Build the unpacked extension with the reviewed trained artifact:
+
+```bash
+npm install
+npm run build:extension -- \
+  --model 'D:/phishme-dataset/artifacts/phishpedia-full-v3-reviewed/model-linear.json' \
+  --outdir extension/dist
+```
+
+The extension packages the **linear** variant because it is the trained variant
+exported in the strict browser-compatible JSON schema. It does not claim to run
+the hybrid model selected as the V3 primary variant. The detector remains an
+experimental research tool: existing cross-dataset smoke results show severe
+generalization limitations and high false-positive rates. A negative extension
+result is therefore phrased as “No phishing signal detected,” never as proof
+that a page is safe, and the extension is not a substitute for Chrome Safe
+Browsing.
 
 ## Data Policy
 

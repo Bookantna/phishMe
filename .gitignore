@@ -15,6 +15,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# Node
+node_modules/
+
 # Notebooks
 .ipynb_checkpoints/
 
@@ -34,3 +37,8 @@ runs/
 
 # Hermes agent scratch
 .hermes/
+
+# Generated Chrome extension package (contains a local model artifact)
+extension/dist/
+extension/.test-build-*/
+extension/.test-e2e-*/
